@@ -11,10 +11,12 @@ import {
 import { onAuthStateChanged } from "firebase/auth";
 import Swal from "sweetalert2";
 import toast from "react-hot-toast";
+
 import { auth, db } from "../assets/firebase/firebase.init";
+import { departments } from "../config/departments";
 
 const SUPERADMIN_EMAIL = "jihadur51@gmail.com";
-const IMGBB_API_KEY = "93ea398f0480de97e39ea40e2cce5b2e";
+const IMGBB_API_KEY = import.meta.env.VITE_IMGBB_API_KEY;
 
 const initialForm = {
   fatherName: "",
@@ -24,15 +26,13 @@ const initialForm = {
   roll: "",
 };
 
-const normalizeId = (value) => {
-  const text = String(value ?? "").trim();
-  return /^\d+$/.test(text) ? String(Number(text)) : text;
-};
-
 const normalizeText = (value) =>
   String(value ?? "")
     .trim()
-    .toLowerCase();
+    .toLowerCase()
+    .replace(/\s+/g, " ");
+
+const normalizeOptionName = normalizeText;
 
 function getName(item) {
   return (
@@ -43,20 +43,6 @@ function getName(item) {
     item?.title ||
     ""
   );
-}
-
-function getDepartmentId(item) {
-  return normalizeId(
-    item?.departmentId ??
-      item?.department?.id ??
-      item?.department?.departmentId ??
-      item?.id ??
-      item?.docId,
-  );
-}
-
-function getItemId(item) {
-  return String(item?.docId ?? item?.id ?? "");
 }
 
 function getPhoto(student) {
@@ -98,15 +84,13 @@ function getPhone(student) {
 }
 
 function getRole(profile, email) {
-  if (email?.toLowerCase() === SUPERADMIN_EMAIL) {
+  if (normalizeText(email) === normalizeText(SUPERADMIN_EMAIL)) {
     return "admin";
   }
 
   const role = normalizeText(profile?.role).replace(/[\s-]+/g, "_");
 
-  if (["admin", "superadmin"].includes(role)) {
-    return "admin";
-  }
+  if (["admin", "superadmin"].includes(role)) return "admin";
 
   if (
     [
@@ -127,13 +111,19 @@ function getRole(profile, email) {
   return role;
 }
 
+function normalizeId(value) {
+  const text = String(value ?? "").trim();
+  return /^\d+$/.test(text) ? String(Number(text)) : text;
+}
+
 function getDepartmentPermissions(profile) {
   const values = [
     ...(Array.isArray(profile?.departmentIds) ? profile.departmentIds : []),
-
     ...(Array.isArray(profile?.departments)
       ? profile.departments.map((item) =>
-          typeof item === "object" ? (item.departmentId ?? item.id) : item,
+          typeof item === "object"
+            ? (item.departmentId ?? item.id ?? item.name)
+            : item,
         )
       : []),
   ];
@@ -150,15 +140,57 @@ function getDepartmentPermissions(profile) {
     values.push(profile.department.departmentId);
   }
 
-  return [...new Set(values.map(normalizeId).filter(Boolean))];
+  if (profile?.departmentName) {
+    values.push(profile.departmentName);
+  }
+
+  if (profile?.department?.name) {
+    values.push(profile.department.name);
+  }
+
+  return [
+    ...new Set(
+      values.map((value) => String(value ?? "").trim()).filter(Boolean),
+    ),
+  ];
 }
 
 function isStudentEnabled(student) {
+  const inactiveValues = [
+    "disabled",
+    "pending",
+    "inactive",
+    "blocked",
+    "suspended",
+    "false",
+    "0",
+  ];
+
   return !(
     student?.isActive === false ||
-    student?.status === "disabled" ||
+    student?.isActive === 0 ||
+    student?.isActive === "false" ||
+    student?.isActive === "0" ||
+    student?.active === false ||
+    student?.enabled === false ||
     student?.approved === false ||
-    student?.status === "pending"
+    inactiveValues.includes(normalizeText(student?.status))
+  );
+}
+
+function isToplineCareStudent(student) {
+  const careName = normalizeText(departments.CARE.name);
+  const studentDepartment = normalizeText(
+    student?.departmentName ||
+      (typeof student?.department === "string" ? student.department : ""),
+  );
+
+  return (
+    student?.isCare === true ||
+    studentDepartment === careName ||
+    studentDepartment.includes("টপলাইন কেয়ার") ||
+    studentDepartment.includes("টপলাইন কেয়ার") ||
+    studentDepartment.includes("care")
   );
 }
 
@@ -169,7 +201,7 @@ function getInitials(name) {
     .toUpperCase();
 }
 
-function StudentAvatar({ student, large = false }) {
+function StudentAvatar({ student }) {
   const [imageError, setImageError] = useState(false);
   const photo = getPhoto(student);
 
@@ -178,11 +210,7 @@ function StudentAvatar({ student, large = false }) {
   }, [photo]);
 
   return (
-    <div
-      className={`flex shrink-0 items-center justify-center overflow-hidden rounded-2xl bg-primary/10 font-bold text-primary ring-1 ring-primary/10 ${
-        large ? "h-[200px] w-[200px] text-4xl" : "h-14 w-14 text-lg"
-      }`}
-    >
+    <div className="flex h-12 w-12 shrink-0 items-center justify-center overflow-hidden rounded-xl bg-primary/10 text-base font-bold text-primary ring-1 ring-primary/10">
       {photo && !imageError ? (
         <img
           src={photo}
@@ -201,8 +229,8 @@ function StudentAvatar({ student, large = false }) {
 function Info({ label, value }) {
   return (
     <div className="min-w-0">
-      <p className="text-xs text-base-content/50">{label}</p>
-      <p className="mt-1 truncate text-sm font-medium">{value || "—"}</p>
+      <p className="text-[11px] text-base-content/50">{label}</p>
+      <p className="mt-0.5 truncate text-sm font-medium">{value || "—"}</p>
     </div>
   );
 }
@@ -216,6 +244,16 @@ function LoadingSpinner({ text = "লোড হচ্ছে..." }) {
   );
 }
 
+function hasDepartmentPermission(permissionValues, department) {
+  const permissionNames = permissionValues.map(normalizeText);
+
+  return (
+    permissionNames.includes(normalizeId(department.id)) ||
+    permissionNames.includes(normalizeText(department.name)) ||
+    permissionNames.includes(normalizeText(department.key))
+  );
+}
+
 export default function Students() {
   const navigate = useNavigate();
 
@@ -223,40 +261,32 @@ export default function Students() {
   const [role, setRole] = useState("");
   const [departmentPermissions, setDepartmentPermissions] = useState([]);
 
-  const [departments, setDepartments] = useState([]);
-  const [classes, setClasses] = useState([]);
-  const [batches, setBatches] = useState([]);
+  const [departmentsList, setDepartmentsList] = useState([]);
   const [students, setStudents] = useState([]);
 
-  const [departmentId, setDepartmentId] = useState("");
-  const [classBatchId, setClassBatchId] = useState("");
+  const [departmentName, setDepartmentName] = useState("");
+  const [classBatchName, setClassBatchName] = useState("");
   const [search, setSearch] = useState("");
 
   const [loading, setLoading] = useState(true);
   const [updatingId, setUpdatingId] = useState("");
 
-  // Edit modal state
   const [editingStudent, setEditingStudent] = useState(null);
   const [editForm, setEditForm] = useState(initialForm);
   const [editPhoto, setEditPhoto] = useState(null);
   const [editPreview, setEditPreview] = useState("");
+
   const [savingProfile, setSavingProfile] = useState(false);
   const [uploadingPhoto, setUploadingPhoto] = useState(false);
   const [deletingPhoto, setDeletingPhoto] = useState(false);
 
   const isAdmin = role === "admin";
   const isDepartmentHead = role === "departmentHead";
-
   const canManageStudents = isAdmin || isDepartmentHead;
   const hasAccess = canManageStudents || role === "teacher";
-
   const profileBusy = savingProfile || uploadingPhoto || deletingPhoto;
 
-  // --------------------------------------------
-  // Load account, departments, classes, batches,
-  // and students.
-  // --------------------------------------------
-
+  // Load profile, departments from config, and students from Firestore.
   useEffect(() => {
     let active = true;
 
@@ -269,9 +299,7 @@ export default function Students() {
         setProfile(null);
         setRole("");
         setDepartmentPermissions([]);
-        setDepartments([]);
-        setClasses([]);
-        setBatches([]);
+        setDepartmentsList([]);
         setStudents([]);
         setLoading(false);
         return;
@@ -287,8 +315,7 @@ export default function Students() {
           : {};
 
         const userRole = getRole(userProfile, user.email);
-
-        const allowedDepartments = getDepartmentPermissions(userProfile);
+        const allowedDepartmentValues = getDepartmentPermissions(userProfile);
 
         const accountDisabled =
           userRole !== "admin" &&
@@ -298,122 +325,65 @@ export default function Students() {
         if (
           !["admin", "departmentHead", "teacher"].includes(userRole) ||
           accountDisabled ||
-          (userRole !== "admin" && allowedDepartments.length === 0)
+          (userRole !== "admin" && allowedDepartmentValues.length === 0)
         ) {
           setProfile(userProfile);
           setRole(userRole);
           setDepartmentPermissions([]);
-          setDepartments([]);
-          setClasses([]);
-          setBatches([]);
+          setDepartmentsList([]);
           setStudents([]);
           setLoading(false);
           return;
         }
 
-        const [departmentSnap, classSnap, batchSnap, studentSnap] =
-          await Promise.all([
-            getDocs(collection(db, "departments")),
-            getDocs(collection(db, "classes")),
-            getDocs(collection(db, "batches")),
-            getDocs(collection(db, "students")),
-          ]);
+        // Department/class/batch names come from departments.js.
+        const configuredDepartments = Object.values(departments);
+
+        const permittedDepartments =
+          userRole === "admin"
+            ? configuredDepartments
+            : configuredDepartments.filter((department) =>
+                hasDepartmentPermission(allowedDepartmentValues, department),
+              );
+
+        // Only students are loaded from Firestore.
+        const studentSnapshot = await getDocs(collection(db, "students"));
 
         if (!active) return;
 
-        const departmentData = departmentSnap.docs.map((item) => ({
-          ...item.data(),
-          docId: item.id,
-        }));
-
-        const classData = classSnap.docs.map((item) => ({
-          ...item.data(),
-          docId: item.id,
-        }));
-
-        const batchData = batchSnap.docs.map((item) => ({
-          ...item.data(),
-          docId: item.id,
-        }));
-
-        const studentData = studentSnap.docs.map((item) => ({
+        const studentData = studentSnapshot.docs.map((item) => ({
           ...item.data(),
           id: item.id,
         }));
 
-        const activeDepartments = departmentData.filter(
-          (item) => item.isActive !== false,
+        const permittedDepartmentNames = new Set(
+          permittedDepartments.map((department) =>
+            normalizeOptionName(department.name),
+          ),
         );
 
-        // Filter departments using the logged-in user's permissions.
-        const allowedDepartmentData =
-          userRole === "admin"
-            ? activeDepartments
-            : activeDepartments.filter((item) =>
-                allowedDepartments.includes(getDepartmentId(item)),
-              );
-
-        const normalClasses = classData.filter(
-          (item) =>
-            item.isActive !== false &&
-            normalizeText(item.type) !== "batch" &&
-            (userRole === "admin" ||
-              allowedDepartments.includes(getDepartmentId(item))),
-        );
-
-        const classBatches = classData.filter(
-          (item) =>
-            normalizeText(item.type) === "batch" &&
-            (userRole === "admin" ||
-              allowedDepartments.includes(getDepartmentId(item))),
-        );
-
-        const combinedBatchMap = new Map();
-
-        batchData.forEach((item) => {
-          if (
-            userRole === "admin" ||
-            allowedDepartments.includes(getDepartmentId(item))
-          ) {
-            combinedBatchMap.set(item.docId, item);
-          }
-        });
-
-        classBatches.forEach((item) => {
-          if (!combinedBatchMap.has(item.docId)) {
-            combinedBatchMap.set(item.docId, item);
-          }
-        });
-
-        // Filter student data locally by department permissions.
         const allowedStudents =
           userRole === "admin"
             ? studentData
             : studentData.filter((student) =>
-                allowedDepartments.includes(normalizeId(student.departmentId)),
+                permittedDepartmentNames.has(
+                  normalizeOptionName(student.departmentName),
+                ),
               );
 
         setProfile(userProfile);
         setRole(userRole);
-        setDepartmentPermissions(allowedDepartments);
-        setDepartments(allowedDepartmentData);
-        setClasses(normalClasses);
-
-        setBatches(
-          [...combinedBatchMap.values()].filter(
-            (item) => item.isActive !== false,
-          ),
-        );
-
+        setDepartmentPermissions(allowedDepartmentValues);
+        setDepartmentsList(permittedDepartments);
         setStudents(allowedStudents);
 
-        if (userRole !== "admin" && allowedDepartmentData.length === 1) {
-          setDepartmentId(getDepartmentId(allowedDepartmentData[0]));
+        if (userRole !== "admin" && permittedDepartments.length === 1) {
+          setDepartmentName(permittedDepartments[0].name);
         } else {
-          setDepartmentId("");
+          setDepartmentName("");
         }
 
-        setClassBatchId("");
+        setClassBatchName("");
       } catch (error) {
         console.error("Students loading error:", error);
         toast.error("শিক্ষার্থীদের তথ্য লোড করা যায়নি।");
@@ -422,9 +392,7 @@ export default function Students() {
           setProfile(null);
           setRole("");
           setDepartmentPermissions([]);
-          setDepartments([]);
-          setClasses([]);
-          setBatches([]);
+          setDepartmentsList([]);
           setStudents([]);
         }
       } finally {
@@ -438,78 +406,66 @@ export default function Students() {
     };
   }, []);
 
-  // --------------------------------------------
-  // Department, class and batch filters
-  // --------------------------------------------
-
-  const filteredClasses = useMemo(() => {
-    if (!departmentId) return [];
-
-    return classes.filter(
-      (item) => getDepartmentId(item) === normalizeId(departmentId),
-    );
-  }, [classes, departmentId]);
-
-  const filteredBatches = useMemo(() => {
-    if (!departmentId) return [];
-
-    return batches.filter(
-      (item) => getDepartmentId(item) === normalizeId(departmentId),
-    );
-  }, [batches, departmentId]);
-
+  // Classes and batches are configured in departments.js.
   const classBatchOptions = useMemo(() => {
-    const options = [
-      ...filteredClasses.map((item) => ({
-        id: getItemId(item),
-        name: getName(item),
-        type: "class",
-      })),
+    if (!departmentName) return [];
 
-      ...filteredBatches.map((item) => ({
-        id: getItemId(item),
-        name: getName(item),
-        type: "batch",
-      })),
-    ];
+    const selectedDepartment = departmentsList.find(
+      (department) =>
+        normalizeOptionName(department.name) ===
+        normalizeOptionName(departmentName),
+    );
 
-    const seen = new Set();
+    if (!selectedDepartment) return [];
 
-    return options.filter((item) => {
-      const key = `${item.type}-${item.id}`;
-
-      if (!item.id || seen.has(key)) return false;
-
-      seen.add(key);
-      return true;
-    });
-  }, [filteredClasses, filteredBatches]);
+    return (selectedDepartment.classes || []).map((item) => ({
+      name: item.name,
+      type: selectedDepartment.type === "batch" ? "batch" : "class",
+    }));
+  }, [departmentsList, departmentName]);
 
   const filteredStudents = useMemo(() => {
     const keyword = normalizeText(search);
-    const selectedId = normalizeId(classBatchId);
+    const selectedDepartment = normalizeOptionName(departmentName);
+    const selectedClassBatch = normalizeOptionName(classBatchName);
 
     return students.filter((student) => {
+      // Match department by its name, not departmentId.
+      const studentDepartment = normalizeOptionName(
+        student.departmentName ||
+          (typeof student.department === "string"
+            ? student.department
+            : student.department?.name),
+      );
+
       const matchesDepartment =
-        !departmentId ||
-        normalizeId(student.departmentId) === normalizeId(departmentId);
+        !selectedDepartment || studentDepartment === selectedDepartment;
+
+      const studentClassName = normalizeOptionName(
+        student.className || student.class,
+      );
+
+      const studentBatchName = normalizeOptionName(
+        student.batchName || student.batch,
+      );
 
       const matchesClassBatch =
-        !selectedId ||
-        normalizeId(student.classId) === selectedId ||
-        normalizeId(student.batchId) === selectedId;
+        !selectedClassBatch ||
+        studentClassName === selectedClassBatch ||
+        studentBatchName === selectedClassBatch;
 
       const searchableText = [
         student.name,
         student.studentId,
-        student.id,
         student.phone,
         student.mobile,
         getFatherName(student),
         getMotherName(student),
         student.villageName,
         student.className,
+        student.class,
         student.batchName,
+        student.batch,
         student.departmentName,
       ]
         .map(normalizeText)
@@ -521,13 +477,9 @@ export default function Students() {
         (!keyword || searchableText.includes(keyword))
       );
     });
-  }, [students, departmentId, classBatchId, search]);
+  }, [students, departmentName, classBatchName, search]);
 
   const enabledCount = filteredStudents.filter(isStudentEnabled).length;
-
-  // --------------------------------------------
-  // SweetAlert2 status switch
-  // --------------------------------------------
 
   async function handleToggleStatus(student) {
     if (!canManageStudents) {
@@ -535,9 +487,16 @@ export default function Students() {
       return;
     }
 
+    const studentDepartment = departmentsList.find(
+      (department) =>
+        normalizeOptionName(department.name) ===
+        normalizeOptionName(student.departmentName),
+    );
+
     if (
       !isAdmin &&
-      !departmentPermissions.includes(normalizeId(student.departmentId))
+      (!studentDepartment ||
+        !hasDepartmentPermission(departmentPermissions, studentDepartment))
     ) {
       toast.error("এই শিক্ষার্থী পরিচালনার অনুমতি নেই।");
       return;
@@ -551,25 +510,17 @@ export default function Students() {
       title: nextEnabled
         ? "শিক্ষার্থী সক্রিয় করবেন?"
         : "শিক্ষার্থী নিষ্ক্রিয় করবেন?",
-
       text: `${student.name || "এই শিক্ষার্থী"}-এর অ্যাকাউন্ট ${
         nextEnabled ? "সক্রিয়" : "নিষ্ক্রিয়"
       } করা হবে।`,
-
       icon: "question",
-
       showCancelButton: true,
-
       confirmButtonText: nextEnabled
         ? "হ্যাঁ, সক্রিয় করুন"
         : "হ্যাঁ, নিষ্ক্রিয় করুন",
-
       cancelButtonText: "বাতিল",
-
       reverseButtons: true,
-
       buttonsStyling: false,
-
       customClass: {
         popup:
           "rounded-2xl border border-base-300 bg-base-100 text-base-content",
@@ -606,46 +557,91 @@ export default function Students() {
         ),
       );
 
-      await Swal.fire({
-        title: "সফল!",
-        text: nextEnabled
+      toast.success(
+        nextEnabled
           ? "শিক্ষার্থী সক্রিয় হয়েছে।"
           : "শিক্ষার্থী নিষ্ক্রিয় হয়েছে।",
-        icon: "success",
-        confirmButtonText: "ঠিক আছে",
-        buttonsStyling: false,
-        customClass: {
-          popup:
-            "rounded-2xl border border-base-300 bg-base-100 text-base-content",
-          title: "text-base-content",
-          htmlContainer: "text-base-content/70",
-          confirmButton: "btn btn-primary",
-        },
-      });
+      );
     } catch (error) {
       console.error("Student status update error:", error);
-
-      Swal.fire({
-        title: "ব্যর্থ!",
-        text: "শিক্ষার্থীর Status পরিবর্তন করা যায়নি।",
-        icon: "error",
-        confirmButtonText: "ঠিক আছে",
-        buttonsStyling: false,
-        customClass: {
-          popup:
-            "rounded-2xl border border-base-300 bg-base-100 text-base-content",
-          title: "text-base-content",
-          confirmButton: "btn btn-primary",
-        },
-      });
+      toast.error("শিক্ষার্থীর Status পরিবর্তন করা যায়নি।");
     } finally {
       setUpdatingId("");
     }
   }
 
-  // --------------------------------------------
-  // Open and close Edit Profile modal
-  // --------------------------------------------
+  async function handleMakeCR(student) {
+    if (!canManageStudents) {
+      toast.error("এই কাজের অনুমতি আপনার নেই।");
+      return;
+    }
+
+    if (!isToplineCareStudent(student)) {
+      toast.error("শুধু টপলাইন কেয়ারের শিক্ষার্থীকে CR করা যাবে।");
+      return;
+    }
+
+    const studentDepartment = departmentsList.find(
+      (department) =>
+        normalizeOptionName(department.name) ===
+        normalizeOptionName(student.departmentName),
+    );
+
+    if (
+      !isAdmin &&
+      (!studentDepartment ||
+        !hasDepartmentPermission(departmentPermissions, studentDepartment))
+    ) {
+      toast.error("এই শিক্ষার্থী পরিচালনার অনুমতি নেই।");
+      return;
+    }
+
+    if (student.isCR === true || updatingId) return;
+
+    const result = await Swal.fire({
+      title: "CR নির্বাচন করবেন?",
+      text: `${student.name || "এই শিক্ষার্থী"}-কে CR হিসেবে চিহ্নিত করা হবে।`,
+      icon: "question",
+      showCancelButton: true,
+      confirmButtonText: "হ্যাঁ, Make CR",
+      cancelButtonText: "বাতিল",
+      reverseButtons: true,
+      buttonsStyling: false,
+      customClass: {
+        popup:
+          "rounded-2xl border border-base-300 bg-base-100 text-base-content",
+        title: "text-base-content",
+        htmlContainer: "text-base-content/70",
+        confirmButton: "btn btn-primary mx-1",
+        cancelButton: "btn btn-ghost mx-1",
+      },
+    });
+
+    if (!result.isConfirmed) return;
+
+    setUpdatingId(student.id);
+
+    try {
+      await updateDoc(doc(db, "students", student.id), {
+        isCR: true,
+        updatedAt: serverTimestamp(),
+        updatedBy: auth.currentUser?.uid || "",
+      });
+
+      setStudents((previous) =>
+        previous.map((item) =>
+          item.id === student.id ? { ...item, isCR: true } : item,
+        ),
+      );
+
+      toast.success(`${student.name || "শিক্ষার্থী"} এখন CR।`);
+    } catch (error) {
+      console.error("Make CR error:", error);
+      toast.error("CR হিসেবে চিহ্নিত করা যায়নি।");
+    } finally {
+      setUpdatingId("");
+    }
+  }
 
   function openEditProfile(student) {
     if (!canManageStudents) {
@@ -653,9 +649,16 @@ export default function Students() {
       return;
     }
 
+    const studentDepartment = departmentsList.find(
+      (department) =>
+        normalizeOptionName(department.name) ===
+        normalizeOptionName(student.departmentName),
+    );
+
     if (
       !isAdmin &&
-      !departmentPermissions.includes(normalizeId(student.departmentId))
+      (!studentDepartment ||
+        !hasDepartmentPermission(departmentPermissions, studentDepartment))
     ) {
       toast.error("এই শিক্ষার্থী সম্পাদনার অনুমতি নেই।");
       return;
@@ -678,7 +681,7 @@ export default function Students() {
   function closeEditProfile() {
     if (profileBusy) return;
 
-    if (editPhoto && editPreview.startsWith("blob:")) {
+    if (editPreview.startsWith("blob:")) {
       URL.revokeObjectURL(editPreview);
     }
 
@@ -697,13 +700,8 @@ export default function Students() {
     }));
   }
 
-  // --------------------------------------------
-  // Image selection and 200 × 200 resize
-  // --------------------------------------------
-
   function handleEditPhotoSelect(event) {
     const file = event.target.files?.[0];
-
     event.target.value = "";
 
     if (!file) return;
@@ -772,14 +770,8 @@ export default function Students() {
     }
   }
 
-  // --------------------------------------------
-  // Delete previous ImageBB image
-  // --------------------------------------------
-
   async function handleDeleteEditPhoto() {
-    if (!editingStudent || profileBusy) return;
-
-    if (!editPreview) return;
+    if (!editingStudent || profileBusy || !editPreview) return;
 
     const result = await Swal.fire({
       title: "আগের ছবি মুছবেন?",
@@ -805,12 +797,10 @@ export default function Students() {
     setDeletingPhoto(true);
 
     try {
-      // If this is only a local preview, no remote deletion is needed.
       if (editPhoto) {
         URL.revokeObjectURL(editPreview);
         setEditPhoto(null);
         setEditPreview("");
-
         toast.success("নির্বাচিত ছবি সরানো হয়েছে।");
         return;
       }
@@ -827,8 +817,7 @@ export default function Students() {
         throw new Error("ImageBB ছবি মুছতে পারেনি।");
       }
 
-      // Clear all known photo URL fields in Firestore.
-      await updateDoc(doc(db, "students", editingStudent.id), {
+      const clearedPhotoFields = {
         photoURL: "",
         photoUrl: "",
         imageUrl: "",
@@ -838,34 +827,24 @@ export default function Students() {
         photoDeleteURL: "",
         updatedAt: serverTimestamp(),
         updatedBy: auth.currentUser?.uid || "",
-      });
+      };
+
+      await updateDoc(
+        doc(db, "students", editingStudent.id),
+        clearedPhotoFields,
+      );
 
       setStudents((previous) =>
         previous.map((item) =>
           item.id === editingStudent.id
-            ? {
-                ...item,
-                photoURL: "",
-                photoUrl: "",
-                imageUrl: "",
-                photo: "",
-                image: "",
-                profileImage: "",
-                photoDeleteURL: "",
-              }
+            ? { ...item, ...clearedPhotoFields }
             : item,
         ),
       );
 
       setEditingStudent((previous) => ({
         ...previous,
-        photoURL: "",
-        photoUrl: "",
-        imageUrl: "",
-        photo: "",
-        image: "",
-        profileImage: "",
-        photoDeleteURL: "",
+        ...clearedPhotoFields,
       }));
 
       setEditPreview("");
@@ -874,25 +853,23 @@ export default function Students() {
       toast.success("আগের ছবি মুছে ফেলা হয়েছে।");
     } catch (error) {
       console.error("Delete profile photo error:", error);
-
       toast.error(error.message || "ছবি মুছতে সমস্যা হয়েছে।");
     } finally {
       setDeletingPhoto(false);
     }
   }
 
-  // --------------------------------------------
-  // Upload new photo to ImageBB
-  // --------------------------------------------
-
   async function uploadEditPhoto() {
     if (!editPhoto) return null;
+
+    if (!IMGBB_API_KEY) {
+      throw new Error("ImageBB API key পাওয়া যায়নি।");
+    }
 
     setUploadingPhoto(true);
 
     try {
       const resizedBlob = await resizeImage(editPhoto);
-
       const body = new FormData();
 
       body.append("image", resizedBlob, "student-profile.jpg");
@@ -920,18 +897,21 @@ export default function Students() {
     }
   }
 
-  // --------------------------------------------
-  // Save edited profile
-  // --------------------------------------------
-
   async function handleSaveProfile(event) {
     event.preventDefault();
 
     if (!editingStudent || profileBusy) return;
 
+    const studentDepartment = departmentsList.find(
+      (department) =>
+        normalizeOptionName(department.name) ===
+        normalizeOptionName(editingStudent.departmentName),
+    );
+
     if (
       !isAdmin &&
-      !departmentPermissions.includes(normalizeId(editingStudent.departmentId))
+      (!studentDepartment ||
+        !hasDepartmentPermission(departmentPermissions, studentDepartment))
     ) {
       toast.error("এই শিক্ষার্থী সম্পাদনার অনুমতি নেই।");
       return;
@@ -944,10 +924,7 @@ export default function Students() {
 
       if (editPhoto) {
         const uploaded = await uploadEditPhoto();
-
-        if (uploaded) {
-          photoData = uploaded;
-        }
+        if (uploaded) photoData = uploaded;
       }
 
       const updatedData = {
@@ -963,42 +940,17 @@ export default function Students() {
 
       await updateDoc(doc(db, "students", editingStudent.id), updatedData);
 
-      const updatedStudent = {
-        ...editingStudent,
-        ...updatedData,
-        ...(photoData.photoURL
-          ? {
-              photoURL: photoData.photoURL,
-              photoDeleteURL: photoData.photoDeleteURL,
-            }
-          : {}),
-      };
-
       setStudents((previous) =>
         previous.map((item) =>
-          item.id === editingStudent.id
-            ? {
-                ...item,
-                ...updatedData,
-                ...(photoData.photoURL
-                  ? {
-                      photoURL: photoData.photoURL,
-                      photoDeleteURL: photoData.photoDeleteURL,
-                    }
-                  : {}),
-              }
-            : item,
+          item.id === editingStudent.id ? { ...item, ...updatedData } : item,
         ),
       );
 
-      setEditingStudent(updatedStudent);
-      setEditPhoto(null);
-
-      if (photoData.photoURL) {
-        setEditPreview(photoData.photoURL);
-      }
-
       toast.success("শিক্ষার্থীর প্রোফাইল আপডেট হয়েছে।");
+
+      if (editPreview.startsWith("blob:")) {
+        URL.revokeObjectURL(editPreview);
+      }
 
       setEditingStudent(null);
       setEditForm(initialForm);
@@ -1006,16 +958,11 @@ export default function Students() {
       setEditPreview("");
     } catch (error) {
       console.error("Save student profile error:", error);
-
       toast.error(error.message || "প্রোফাইল আপডেট করা যায়নি।");
     } finally {
       setSavingProfile(false);
     }
   }
-
-  // --------------------------------------------
-  // Loading and access denied
-  // --------------------------------------------
 
   if (loading) {
     return <LoadingSpinner text="শিক্ষার্থীদের তথ্য লোড হচ্ছে..." />;
@@ -1024,8 +971,7 @@ export default function Students() {
   if (!auth.currentUser || !hasAccess || !profile) {
     return (
       <div className="mx-auto mt-12 max-w-md rounded-2xl border border-base-300 bg-base-100 p-8 text-center text-base-content">
-        <h2 className="text-xl font-bold">Access Denied</h2>
-
+        <h2 className="text-lg font-bold">Access Denied</h2>
         <p className="mt-2 text-sm text-base-content/60">
           শিক্ষার্থীদের তালিকা দেখার অনুমতি নেই।
         </p>
@@ -1033,113 +979,111 @@ export default function Students() {
     );
   }
 
-  // --------------------------------------------
-  // Main UI
-  // --------------------------------------------
-
   return (
-    <main className="min-h-screen bg-base-200/50 px-3 py-5 text-base-content sm:px-6 sm:py-7">
-      <div className="mx-auto max-w-7xl space-y-5">
-        {/* Header */}
+    <main className="min-h-screen bg-base-200/50 px-3 py-4 text-base-content sm:px-5">
+      <div className="mx-auto max-w-7xl space-y-3">
+        <section className="rounded-2xl border border-base-300 bg-base-100 p-3 shadow-sm sm:p-4">
+          <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
+            <div className="flex items-center gap-2">
+              <span className="flex h-9 w-9 items-center justify-center rounded-xl bg-primary/10 text-primary">
+                <svg
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth="1.8"
+                  className="h-5 w-5"
+                  aria-hidden="true"
+                >
+                  <path
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                    d="M16 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2m6-10a4 4 0 1 0 0-8 4 4 0 0 0 0 8Zm8-3a4 4 0 0 1 0 8m4 5v-2a4 4 0 0 0-3-3.87"
+                  />
+                </svg>
+              </span>
 
-        <header className="relative overflow-hidden rounded-3xl bg-gradient-to-br from-primary to-primary/80 p-6 text-primary-content shadow-lg sm:p-8">
-          <div className="pointer-events-none absolute -right-10 -top-16 h-48 w-48 rounded-full border-[28px] border-white/10" />
-
-          <div className="relative flex flex-col justify-between gap-5 sm:flex-row sm:items-center">
-            <div>
-              <p className="text-sm text-primary-content/70">
-                TopLine Education
-              </p>
-
-              <h1 className="mt-1 text-3xl font-extrabold tracking-tight">
-                Students
-              </h1>
-
-              <p className="mt-2 text-sm text-primary-content/75">
-                শিক্ষার্থী ব্যবস্থাপনা
-              </p>
+              <div className="flex items-baseline gap-2">
+                <span className="text-sm font-bold">শিক্ষার্থী</span>
+                <span className="text-xs text-base-content/50">
+                  {filteredStudents.length} জন
+                </span>
+              </div>
             </div>
 
-            <div className="flex gap-3">
-              <div className="min-w-28 rounded-2xl border border-white/15 bg-white/10 px-4 py-3 backdrop-blur">
-                <p className="text-xs text-primary-content/70">
-                  মোট শিক্ষার্থী
-                </p>
-
-                <p className="mt-1 text-3xl font-extrabold">
-                  {filteredStudents.length}
-                </p>
+            <div className="flex items-center gap-2">
+              <div className="rounded-xl bg-base-200 px-3 py-1.5">
+                <span className="text-xs text-base-content/60">সক্রিয় </span>
+                <span className="text-sm font-bold text-success">
+                  {enabledCount}
+                </span>
               </div>
 
-              <div className="min-w-28 rounded-2xl border border-white/15 bg-white/10 px-4 py-3 backdrop-blur">
-                <p className="text-xs text-primary-content/70">সক্রিয়</p>
-
-                <p className="mt-1 text-3xl font-extrabold">{enabledCount}</p>
+              <div className="rounded-xl bg-base-200 px-3 py-1.5">
+                <span className="text-xs text-base-content/60">নিষ্ক্রিয় </span>
+                <span className="text-sm font-bold text-error">
+                  {filteredStudents.length - enabledCount}
+                </span>
               </div>
             </div>
           </div>
-        </header>
 
-        {/* Filters */}
-
-        <section className="rounded-2xl border border-base-300 bg-base-100 p-4 shadow-sm sm:p-5">
-          <div className="grid grid-cols-1 gap-3 md:grid-cols-3">
+          <div className="grid grid-cols-1 gap-2 sm:grid-cols-3">
             <label className="form-control">
-              <span className="label-text mb-2 text-xs font-semibold">
+              <span className="mb-1 text-[11px] font-semibold text-base-content/60">
                 বিভাগ
               </span>
 
               <select
-                className="select select-bordered w-full bg-base-100"
-                value={departmentId}
-                disabled={!isAdmin && departments.length === 1}
+                className="select select-bordered select-sm w-full bg-base-100"
+                value={departmentName}
+                disabled={!isAdmin && departmentsList.length === 1}
                 onChange={(event) => {
-                  setDepartmentId(event.target.value);
-                  setClassBatchId("");
+                  setDepartmentName(event.target.value);
+                  setClassBatchName("");
                 }}
               >
                 <option value="">সব অনুমোদিত বিভাগ</option>
 
-                {departments.map((item) => (
-                  <option key={item.docId} value={getDepartmentId(item)}>
-                    {getName(item)}
+                {departmentsList.map((department) => (
+                  <option key={department.name} value={department.name}>
+                    {department.name}
                   </option>
                 ))}
               </select>
             </label>
 
             <label className="form-control">
-              <span className="label-text mb-2 text-xs font-semibold">
+              <span className="mb-1 text-[11px] font-semibold text-base-content/60">
                 শ্রেণি / ব্যাচ
               </span>
 
               <select
-                className="select select-bordered w-full bg-base-100"
-                value={classBatchId}
-                disabled={!departmentId}
-                onChange={(event) => setClassBatchId(event.target.value)}
+                className="select select-bordered select-sm w-full bg-base-100"
+                value={classBatchName}
+                disabled={!departmentName}
+                onChange={(event) => setClassBatchName(event.target.value)}
               >
                 <option value="">
-                  {departmentId ? "সব শ্রেণি / ব্যাচ" : "বিভাগ নির্বাচন করুন"}
+                  {departmentName ? "সব শ্রেণি / ব্যাচ" : "বিভাগ নির্বাচন করুন"}
                 </option>
 
                 {classBatchOptions.map((item) => (
-                  <option key={`${item.type}-${item.id}`} value={item.id}>
+                  <option key={`${item.type}-${item.name}`} value={item.name}>
                     {item.name}
-                    {item.type === "batch" ? " (Batch)" : ""}
+                    {item.type === "batch" ? " · Batch" : ""}
                   </option>
                 ))}
               </select>
             </label>
 
             <label className="form-control">
-              <span className="label-text mb-2 text-xs font-semibold">
-                শিক্ষার্থী খুঁজুন
+              <span className="mb-1 text-[11px] font-semibold text-base-content/60">
+                খুঁজুন
               </span>
 
               <input
                 type="search"
-                className="input input-bordered w-full bg-base-100"
+                className="input input-bordered input-sm w-full bg-base-100"
                 placeholder="নাম, ID, ফোন..."
                 value={search}
                 onChange={(event) => setSearch(event.target.value)}
@@ -1147,105 +1091,123 @@ export default function Students() {
             </label>
           </div>
 
-          {(search || departmentId || classBatchId) && (
-            <div className="mt-3 flex justify-end">
+          {(search || departmentName || classBatchName) && (
+            <div className="mt-2 flex justify-end">
               <button
                 type="button"
                 className="btn btn-ghost btn-xs"
                 onClick={() => {
-                  setDepartmentId(
-                    !isAdmin && departments.length === 1
-                      ? getDepartmentId(departments[0])
+                  setDepartmentName(
+                    !isAdmin && departmentsList.length === 1
+                      ? departmentsList[0].name
                       : "",
                   );
-
-                  setClassBatchId("");
+                  setClassBatchName("");
                   setSearch("");
                 }}
               >
-                Reset filters
+                ফিল্টার রিসেট
               </button>
             </div>
           )}
         </section>
 
-        {/* Student cards */}
-
         {filteredStudents.length === 0 ? (
-          <div className="rounded-2xl border border-base-300 bg-base-100 px-5 py-14 text-center">
-            <div className="mx-auto flex h-14 w-14 items-center justify-center rounded-2xl bg-base-200 text-2xl">
-              ?
+          <div className="rounded-2xl border border-base-300 bg-base-100 px-5 py-12 text-center">
+            <div className="mx-auto flex h-12 w-12 items-center justify-center rounded-xl bg-base-200">
+              <svg
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="1.8"
+                className="h-6 w-6 text-base-content/50"
+                aria-hidden="true"
+              >
+                <circle cx="11" cy="11" r="7" />
+                <path strokeLinecap="round" d="m16 16 4 4M8 11h6" />
+              </svg>
             </div>
 
-            <h2 className="mt-4 font-bold">কোনো শিক্ষার্থী পাওয়া যায়নি</h2>
+            <h2 className="mt-3 text-sm font-bold">
+              কোনো শিক্ষার্থী পাওয়া যায়নি
+            </h2>
 
-            <p className="mt-1 text-sm text-base-content/55">
+            <p className="mt-1 text-xs text-base-content/55">
               সার্চ বা ফিল্টার পরিবর্তন করে দেখুন।
             </p>
           </div>
         ) : (
-          <section className="grid grid-cols-1 gap-4 lg:grid-cols-2 xl:grid-cols-3">
+          <section className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-3">
             {filteredStudents.map((student) => {
               const enabled = isStudentEnabled(student);
               const phone = getPhone(student);
               const studentRouteId = student.studentId || student.id;
+              const careStudent = isToplineCareStudent(student);
 
               return (
                 <article
                   key={student.id}
-                  className="overflow-hidden rounded-2xl border border-base-300 bg-base-100 shadow-sm transition duration-200 hover:-translate-y-0.5 hover:border-primary/30 hover:shadow-lg"
+                  className="overflow-hidden rounded-2xl border border-base-300 bg-base-100 shadow-sm transition duration-200 hover:border-primary/30 hover:shadow-md"
                 >
-                  <div className="flex items-start gap-3 p-4">
+                  <div className="flex items-start gap-3 p-3">
                     <StudentAvatar student={student} />
 
                     <div className="min-w-0 flex-1">
                       <div className="flex items-start justify-between gap-2">
                         <div className="min-w-0">
-                          <h2 className="truncate font-bold">
+                          <h2 className="truncate text-sm font-bold">
                             {student.name || "নাম দেওয়া হয়নি"}
                           </h2>
 
-                          <p className="mt-1 font-mono text-xs text-primary">
+                          <p className="mt-0.5 truncate font-mono text-[11px] text-primary">
                             ID: {studentRouteId}
                           </p>
                         </div>
 
-                        <span
-                          className={`badge badge-sm shrink-0 ${
-                            enabled ? "badge-success" : "badge-error"
-                          }`}
-                        >
-                          {enabled ? "Active" : "Inactive"}
-                        </span>
+                        <div className="flex shrink-0 flex-wrap justify-end gap-1">
+                          <span
+                            className={`badge badge-xs ${
+                              enabled ? "badge-success" : "badge-error"
+                            }`}
+                          >
+                            {enabled ? "Active" : "Inactive"}
+                          </span>
+
+                          {student.isCR === true && (
+                            <span className="badge badge-primary badge-xs">
+                              CR
+                            </span>
+                          )}
+                        </div>
                       </div>
 
-                      <div className="mt-2 flex flex-wrap gap-1.5">
+                      <div className="mt-2 flex flex-wrap gap-1">
                         {student.departmentName && (
-                          <span className="badge badge-ghost badge-sm">
+                          <span className="badge badge-ghost badge-xs">
                             {student.departmentName}
                           </span>
                         )}
 
                         {student.className && (
-                          <span className="badge badge-ghost badge-sm">
+                          <span className="badge badge-ghost badge-xs">
                             {student.className}
                           </span>
                         )}
 
                         {student.batchName && (
-                          <span className="badge badge-outline badge-sm">
+                          <span className="badge badge-outline badge-xs">
                             {student.batchName}
                           </span>
                         )}
 
-                        {student.isCare === true && (
-                          <span className="badge badge-info badge-sm">
+                        {careStudent && (
+                          <span className="badge badge-info badge-xs">
                             Care
                           </span>
                         )}
 
                         {student.isCoaching === true && (
-                          <span className="badge badge-secondary badge-sm">
+                          <span className="badge badge-secondary badge-xs">
                             Coaching
                           </span>
                         )}
@@ -1253,37 +1215,34 @@ export default function Students() {
                     </div>
                   </div>
 
-                  <div className="grid grid-cols-2 gap-4 border-t border-base-300 px-4 py-3">
+                  <div className="grid grid-cols-2 gap-3 border-t border-base-300 px-3 py-2.5">
                     <Info label="পিতার নাম" value={getFatherName(student)} />
-
                     <Info label="মোবাইল" value={phone} />
                   </div>
 
                   {canManageStudents && student.pin && (
-                    <div className="border-t border-base-300 px-4 py-2">
-                      <p className="text-xs text-base-content/50">
+                    <div className="border-t border-base-300 px-3 py-2">
+                      <p className="text-[11px] text-base-content/50">
                         PIN:{" "}
-                        <span className="font-mono font-semibold">
+                        <span className="font-mono font-semibold text-base-content">
                           {student.pin}
                         </span>
                       </p>
                     </div>
                   )}
 
-                  {/* Actions */}
-
-                  <div className="flex gap-2 border-t border-base-300 p-3">
+                  <div className="flex gap-2 border-t border-base-300 p-2.5">
                     {phone ? (
                       <a
                         href={`tel:${phone.replace(/[^\d+]/g, "")}`}
-                        className="btn btn-outline btn-success btn-sm flex-1"
+                        className="btn btn-outline btn-success btn-xs flex-1"
                       >
                         Call
                       </a>
                     ) : (
                       <button
                         type="button"
-                        className="btn btn-outline btn-sm flex-1"
+                        className="btn btn-outline btn-xs flex-1"
                         disabled
                       >
                         No phone
@@ -1292,35 +1251,31 @@ export default function Students() {
 
                     <button
                       type="button"
-                      className="btn btn-primary btn-sm flex-1"
+                      className="btn btn-primary btn-xs flex-1"
                       onClick={() => navigate(`/student/${studentRouteId}`)}
                     >
                       View Profile →
                     </button>
                   </div>
 
-                  {/* Edit Profile */}
-
                   {canManageStudents && (
-                    <div className="grid grid-cols-2 gap-2 px-3 pb-3">
+                    <div className="grid grid-cols-2 gap-2 px-2.5 pb-2.5">
                       <button
                         type="button"
-                        className="btn btn-outline btn-primary btn-sm"
+                        className="btn btn-outline btn-primary btn-xs"
                         onClick={() => openEditProfile(student)}
                       >
                         Edit Profile
                       </button>
 
-                      {/* SW2 / SweetAlert2 status confirmation */}
-
                       <label
-                        className={`flex cursor-pointer items-center justify-center gap-2 rounded-lg border border-base-300 px-2 py-2 text-xs font-medium ${
+                        className={`flex cursor-pointer items-center justify-center gap-2 rounded-lg border border-base-300 px-2 py-1.5 text-xs font-medium ${
                           enabled ? "text-success" : "text-base-content/60"
                         }`}
                       >
                         <input
                           type="checkbox"
-                          className="toggle toggle-success toggle-sm"
+                          className="toggle toggle-success toggle-xs"
                           checked={enabled}
                           disabled={updatingId === student.id}
                           onChange={() => handleToggleStatus(student)}
@@ -1329,14 +1284,30 @@ export default function Students() {
                           } ${student.name || "student"}`}
                         />
 
-                        {updatingId === student.id ? (
-                          <span className="loading loading-spinner loading-xs" />
-                        ) : enabled ? (
-                          "Active"
-                        ) : (
-                          "Inactive"
-                        )}
+                        {updatingId === student.id
+                          ? "Processing..."
+                          : enabled
+                            ? "Active"
+                            : "Inactive"}
                       </label>
+
+                      {careStudent && student.isCR !== true && (
+                        <button
+                          type="button"
+                          className="btn btn-outline btn-secondary btn-xs col-span-2"
+                          disabled={Boolean(updatingId)}
+                          onClick={() => handleMakeCR(student)}
+                        >
+                          {updatingId === student.id ? (
+                            <>
+                              <span className="loading loading-spinner loading-xs" />
+                              Processing...
+                            </>
+                          ) : (
+                            "Make CR"
+                          )}
+                        </button>
+                      )}
                     </div>
                   )}
                 </article>
@@ -1345,10 +1316,6 @@ export default function Students() {
           </section>
         )}
       </div>
-
-      {/* ----------------------------------------
-          EDIT PROFILE MODAL
-      ----------------------------------------- */}
 
       {editingStudent && (
         <div
@@ -1365,15 +1332,13 @@ export default function Students() {
             aria-labelledby="edit-profile-title"
             className="my-4 w-full max-w-2xl overflow-hidden rounded-2xl border border-base-300 bg-base-100 text-base-content shadow-2xl sm:my-8"
           >
-            {/* Modal header */}
-
-            <div className="flex items-start justify-between gap-4 border-b border-base-300 p-5 sm:p-6">
+            <div className="flex items-start justify-between gap-4 border-b border-base-300 p-4 sm:p-5">
               <div>
-                <h2 id="edit-profile-title" className="text-xl font-bold">
+                <h2 id="edit-profile-title" className="text-lg font-bold">
                   Edit Student Profile
                 </h2>
 
-                <p className="mt-1 text-sm text-base-content/60">
+                <p className="mt-1 text-xs text-base-content/60">
                   {editingStudent.name || "Student"} ·{" "}
                   {editingStudent.studentId || editingStudent.id}
                 </p>
@@ -1391,22 +1356,20 @@ export default function Students() {
             </div>
 
             <form onSubmit={handleSaveProfile}>
-              <div className="max-h-[75vh] space-y-6 overflow-y-auto p-5 sm:p-6">
-                {/* Photo */}
-
-                <div className="flex flex-col items-center rounded-2xl border border-base-300 bg-base-200/30 p-5">
+              <div className="max-h-[75vh] space-y-4 overflow-y-auto p-4 sm:p-5">
+                <div className="flex flex-col items-center rounded-xl border border-base-300 bg-base-200/30 p-4">
                   <div className="relative">
-                    <div className="h-[200px] w-[200px] overflow-hidden rounded-full border-4 border-base-100 bg-base-200 shadow-md">
+                    <div className="h-[160px] w-[160px] overflow-hidden rounded-full border-4 border-base-100 bg-base-200 shadow-md">
                       {editPreview ? (
                         <img
                           src={editPreview}
                           alt="Student profile"
-                          width={200}
-                          height={200}
+                          width={160}
+                          height={160}
                           className="h-full w-full object-cover"
                         />
                       ) : (
-                        <div className="flex h-full w-full items-center justify-center text-5xl font-bold text-primary">
+                        <div className="flex h-full w-full items-center justify-center text-4xl font-bold text-primary">
                           {getInitials(editingStudent.name)}
                         </div>
                       )}
@@ -1415,8 +1378,7 @@ export default function Students() {
                     {(uploadingPhoto || deletingPhoto) && (
                       <div className="absolute inset-0 flex flex-col items-center justify-center rounded-full bg-black/60 text-white">
                         <span className="loading loading-spinner loading-lg" />
-
-                        <p className="mt-3 text-xs">
+                        <p className="mt-2 text-xs">
                           {uploadingPhoto
                             ? "ছবি আপলোড হচ্ছে..."
                             : "ছবি মুছে ফেলা হচ্ছে..."}
@@ -1425,29 +1387,22 @@ export default function Students() {
                     )}
                   </div>
 
-                  <p className="mt-3 text-sm text-base-content/60">
+                  <p className="mt-2 text-xs text-base-content/60">
                     200 × 200 pixels · সর্বোচ্চ 5 MB
                   </p>
 
                   {editPreview && !editPhoto ? (
                     <button
                       type="button"
-                      className="btn btn-outline btn-error btn-sm mt-4"
+                      className="btn btn-outline btn-error btn-xs mt-3"
                       disabled={profileBusy}
                       onClick={handleDeleteEditPhoto}
                     >
-                      {deletingPhoto ? (
-                        <>
-                          <span className="loading loading-spinner loading-xs" />
-                          মুছে ফেলা হচ্ছে...
-                        </>
-                      ) : (
-                        "আগের ছবি মুছুন"
-                      )}
+                      {deletingPhoto ? "মুছে ফেলা হচ্ছে..." : "আগের ছবি মুছুন"}
                     </button>
                   ) : (
                     <label
-                      className={`btn btn-primary btn-sm mt-4 ${
+                      className={`btn btn-primary btn-xs mt-3 ${
                         profileBusy ? "pointer-events-none opacity-50" : ""
                       }`}
                     >
@@ -1463,8 +1418,8 @@ export default function Students() {
                   )}
 
                   {editPhoto && (
-                    <div className="mt-3 text-center">
-                      <p className="text-sm text-success">
+                    <div className="mt-2 text-center">
+                      <p className="text-xs text-success">
                         নতুন ছবি নির্বাচিত হয়েছে।
                       </p>
 
@@ -1483,104 +1438,96 @@ export default function Students() {
                     </div>
                   )}
 
-                  <p className="mt-3 text-center text-xs text-base-content/50">
+                  <p className="mt-2 text-center text-[11px] text-base-content/50">
                     নতুন ছবি দিতে হলে প্রথমে আগের ছবিটি মুছুন।
                   </p>
                 </div>
 
-                {/* Student info (read-only) */}
-
-                <div className="rounded-xl bg-base-200/50 p-4">
-                  <p className="text-xs text-base-content/50">
+                <div className="rounded-xl bg-base-200/50 p-3">
+                  <p className="text-[11px] text-base-content/50">
                     শিক্ষার্থীর নাম
                   </p>
 
-                  <p className="mt-1 font-semibold">
+                  <p className="mt-1 text-sm font-semibold">
                     {editingStudent.name || "—"}
                   </p>
 
                   <div className="mt-3 grid grid-cols-2 gap-3">
                     <Info
                       label="Care"
-                      value={editingStudent.isCare === true ? "Yes" : "No"}
+                      value={
+                        isToplineCareStudent(editingStudent) ? "Yes" : "No"
+                      }
                     />
-
                     <Info
-                      label="Coaching"
-                      value={editingStudent.isCoaching === true ? "Yes" : "No"}
+                      label="CR"
+                      value={editingStudent.isCR === true ? "Yes" : "No"}
                     />
                   </div>
                 </div>
 
-                {/* Optional fields */}
-
                 <div>
-                  <h3 className="mb-4 font-semibold">
+                  <h3 className="mb-3 text-sm font-semibold">
                     অতিরিক্ত ব্যক্তিগত তথ্য
                   </h3>
 
-                  <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+                  <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
                     <label className="form-control">
-                      <span className="label-text mb-2 text-sm font-medium">
+                      <span className="label-text mb-1.5 text-xs font-medium">
                         বাবার নাম
                       </span>
-
                       <input
                         type="text"
                         name="fatherName"
                         value={editForm.fatherName}
                         onChange={handleEditChange}
                         placeholder="বাবার নাম"
-                        className="input input-bordered w-full bg-base-100"
+                        className="input input-bordered input-sm w-full bg-base-100"
                         disabled={profileBusy}
                       />
                     </label>
 
                     <label className="form-control">
-                      <span className="label-text mb-2 text-sm font-medium">
+                      <span className="label-text mb-1.5 text-xs font-medium">
                         মায়ের নাম
                       </span>
-
                       <input
                         type="text"
                         name="motherName"
                         value={editForm.motherName}
                         onChange={handleEditChange}
                         placeholder="মায়ের নাম"
-                        className="input input-bordered w-full bg-base-100"
+                        className="input input-bordered input-sm w-full bg-base-100"
                         disabled={profileBusy}
                       />
                     </label>
 
                     <label className="form-control">
-                      <span className="label-text mb-2 text-sm font-medium">
+                      <span className="label-text mb-1.5 text-xs font-medium">
                         জন্মতারিখ
                       </span>
-
                       <input
                         type="date"
                         name="dateOfBirth"
                         value={editForm.dateOfBirth}
                         onChange={handleEditChange}
-                        className="input input-bordered w-full bg-base-100"
+                        className="input input-bordered input-sm w-full bg-base-100"
                         disabled={profileBusy}
                       />
                     </label>
 
                     <label className="form-control">
-                      <span className="label-text mb-2 text-sm font-medium">
+                      <span className="label-text mb-1.5 text-xs font-medium">
                         ধর্ম
                       </span>
-
                       <select
                         name="religion"
                         value={editForm.religion}
                         onChange={handleEditChange}
-                        className="select select-bordered w-full bg-base-100"
+                        className="select select-bordered select-sm w-full bg-base-100"
                         disabled={profileBusy}
                       >
                         <option value="">ধর্ম নির্বাচন করুন</option>
-
                         {[
                           "ইসলাম",
                           "হিন্দু",
@@ -1596,10 +1543,9 @@ export default function Students() {
                     </label>
 
                     <label className="form-control sm:col-span-2">
-                      <span className="label-text mb-2 text-sm font-medium">
+                      <span className="label-text mb-1.5 text-xs font-medium">
                         রোল নম্বর
                       </span>
-
                       <input
                         type="text"
                         name="roll"
@@ -1607,24 +1553,22 @@ export default function Students() {
                         value={editForm.roll}
                         onChange={handleEditChange}
                         placeholder="রোল নম্বর"
-                        className="input input-bordered w-full bg-base-100"
+                        className="input input-bordered input-sm w-full bg-base-100"
                         disabled={profileBusy}
                       />
                     </label>
                   </div>
 
-                  <p className="mt-3 text-xs text-base-content/50">
+                  <p className="mt-2 text-[11px] text-base-content/50">
                     সব তথ্য ঐচ্ছিক। কোনো ফিল্ড খালি রাখলেও সেভ করা যাবে।
                   </p>
                 </div>
               </div>
 
-              {/* Modal footer */}
-
-              <div className="flex flex-col-reverse gap-3 border-t border-base-300 p-4 sm:flex-row sm:justify-end sm:p-5">
+              <div className="flex flex-col-reverse gap-2 border-t border-base-300 p-3 sm:flex-row sm:justify-end sm:p-4">
                 <button
                   type="button"
-                  className="btn btn-ghost"
+                  className="btn btn-ghost btn-sm"
                   disabled={profileBusy}
                   onClick={closeEditProfile}
                 >
@@ -1633,12 +1577,12 @@ export default function Students() {
 
                 <button
                   type="submit"
-                  className="btn btn-primary min-w-44"
+                  className="btn btn-primary btn-sm min-w-36"
                   disabled={profileBusy}
                 >
                   {savingProfile || uploadingPhoto ? (
                     <>
-                      <span className="loading loading-spinner loading-sm" />
+                      <span className="loading loading-spinner loading-xs" />
                       {uploadingPhoto ? "ছবি আপলোড হচ্ছে..." : "সেভ হচ্ছে..."}
                     </>
                   ) : (

@@ -9,6 +9,7 @@
   font-display: swap;
 }
 
+@custom-variant dark (&:where(.dark, .dark *));
 body {
   font-family: "Li Ador Noirrit", sans-serif;
 }

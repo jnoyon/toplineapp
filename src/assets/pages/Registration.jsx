@@ -1,51 +1,44 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useState } from "react";
 import {
   collection,
   doc,
-  getDoc,
   getDocs,
+  runTransaction,
   serverTimestamp,
-  setDoc,
 } from "firebase/firestore";
-
+import { Link, useNavigate } from "react-router";
 import toast from "react-hot-toast";
 
 import { db } from "../firebase/firebase.init";
-import { AnimatePresence, motion } from "framer-motion";
 import { departmentList } from "../../config/departments";
 
 const initialForm = {
   name: "",
   phone: "",
   villageId: "",
+  customVillage: "",
   departmentId: "",
   classId: "",
-  batchId: "",
   gender: "",
 };
 
 const inputClass =
-  "input input-bordered w-full rounded-xl bg-base-100 text-base-content transition-all duration-200 focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/15";
+  "input input-bordered w-full rounded-xl border-base-300 bg-base-100 text-base-content transition-colors focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/20";
 
-const fadeUp = {
-  hidden: { opacity: 0, y: 18 },
-  visible: { opacity: 1, y: 0 },
-};
+const labelClass = "mb-2 block text-sm font-semibold text-base-content";
 
-function getName(item) {
-  return (
-    item?.name ||
-    item?.className ||
-    item?.batchName ||
-    item?.villageName ||
-    item?.departmentName ||
-    item?.title ||
-    ""
-  );
-}
+function normalizePhone(phone) {
+  let number = String(phone || "").replace(/\D/g, "");
 
-function getItemId(item, field) {
-  return String(item?.[field] ?? item?.id ?? item?.docId ?? "");
+  if (number.startsWith("00880")) number = number.slice(2);
+
+  if (number.startsWith("880")) {
+    number = `0${number.slice(3)}`;
+  } else if (number.length === 10 && number.startsWith("1")) {
+    number = `0${number}`;
+  }
+
+  return number;
 }
 
 function generatePin() {
@@ -55,721 +48,511 @@ function generatePin() {
 }
 
 export default function Registration() {
+  const navigate = useNavigate();
+
   const [form, setForm] = useState(initialForm);
   const [villages, setVillages] = useState([]);
-  const [loadingData, setLoadingData] = useState(true);
+  const [customVillage, setCustomVillage] = useState(false);
+  const [loading, setLoading] = useState(true);
   const [submitting, setSubmitting] = useState(false);
-  const [credentials, setCredentials] = useState(null);
-  const [showPin, setShowPin] = useState(true);
 
-  // Departments from local configuration.
-  const departments = useMemo(
-    () =>
-      departmentList.map((department) => ({
-        ...department,
-        id: String(department.id).padStart(2, "0"),
-        docId: String(department.id).padStart(2, "0"),
-      })),
-    [],
+  const department = departmentList.find(
+    (item) => String(item.id) === form.departmentId,
   );
 
-  // Classes from local configuration.
-  const classes = useMemo(
-    () =>
-      departmentList.flatMap((department) =>
-        department.type === "batch"
-          ? []
-          : (department.classes || []).map((item) => ({
-              ...item,
-              classId: String(item.id),
-              departmentId: String(department.id).padStart(2, "0"),
-              docId: `${department.id}-${item.id}`,
-            })),
-      ),
-    [],
-  );
+  const isCare = department?.type === "batch";
+  const classes = department?.classes || [];
 
-  // Batches from local configuration.
-  const batches = useMemo(
-    () =>
-      departmentList.flatMap((department) =>
-        department.type === "batch"
-          ? (department.classes || []).map((item) => ({
-              ...item,
-              batchId: String(item.id),
-              departmentId: String(department.id).padStart(2, "0"),
-              docId: `${department.id}-${item.id}`,
-            }))
-          : [],
-      ),
-    [],
-  );
-
-  // Only villages are loaded from Firestore.
   useEffect(() => {
-    let active = true;
-
     async function loadVillages() {
       try {
         const snapshot = await getDocs(collection(db, "villages"));
 
-        if (!active) return;
-
         setVillages(
           snapshot.docs
             .map((item) => ({
+              id: item.id,
               ...item.data(),
-              docId: item.id,
             }))
-            .filter((item) => item.isActive !== false),
+            .filter((item) => item.isActive !== false)
+            .sort((a, b) =>
+              String(a.name || a.villageName || "").localeCompare(
+                String(b.name || b.villageName || ""),
+                "bn",
+              ),
+            ),
         );
       } catch (error) {
         console.error("Village loading error:", error);
         toast.error("গ্রামের তথ্য লোড করা যায়নি।");
       } finally {
-        if (active) setLoadingData(false);
+        setLoading(false);
       }
     }
 
     loadVillages();
-
-    return () => {
-      active = false;
-    };
   }, []);
-
-  const selectedDepartment = departments.find(
-    (item) => item.id === form.departmentId,
-  );
-
-  const isToplineCare = selectedDepartment?.type === "batch";
-
-  const departmentClasses = useMemo(
-    () => classes.filter((item) => item.departmentId === form.departmentId),
-    [classes, form.departmentId],
-  );
-
-  const departmentBatches = useMemo(
-    () => batches.filter((item) => item.departmentId === form.departmentId),
-    [batches, form.departmentId],
-  );
 
   function handleChange(event) {
     const { name, value } = event.target;
 
-    setForm((previous) => {
-      if (name === "departmentId") {
-        return {
-          ...previous,
-          departmentId: value,
-          classId: "",
-          batchId: "",
-          gender: "",
-        };
-      }
-
-      return {
-        ...previous,
-        [name]: value,
-      };
-    });
+    setForm((previous) => ({
+      ...previous,
+      [name]: value,
+      ...(name === "departmentId" ? { classId: "", gender: "" } : {}),
+    }));
   }
 
-  function validateForm() {
-    if (!form.name.trim()) {
-      toast.error("শিক্ষার্থীর নাম লিখুন।");
-      return false;
-    }
+  function handleVillageModeChange(useCustomVillage) {
+    setCustomVillage(useCustomVillage);
 
-    if (!/^[0-9+\-\s]{8,20}$/.test(form.phone.trim())) {
-      toast.error("সঠিক মোবাইল নম্বর লিখুন।");
-      return false;
-    }
-
-    if (!form.villageId) {
-      toast.error("গ্রাম বা এলাকা নির্বাচন করুন।");
-      return false;
-    }
-
-    if (!form.departmentId || !selectedDepartment) {
-      toast.error("বিভাগ নির্বাচন করুন।");
-      return false;
-    }
-
-    if (!form.gender) {
-      toast.error("লিঙ্গ নির্বাচন করুন।");
-      return false;
-    }
-
-    if (isToplineCare && !form.batchId) {
-      toast.error("Batch নির্বাচন করুন।");
-      return false;
-    }
-
-    if (!isToplineCare && !form.classId) {
-      toast.error("শ্রেণি নির্বাচন করুন।");
-      return false;
-    }
-
-    return true;
-  }
-
-  // ID format: department + gender + 3-digit serial.
-  // Examples: 11001, 12001, 21001, 22001, 31001, 32001.
-  async function createUniqueStudentId(departmentId, gender) {
-    const genderNumber = gender === "male" ? "1" : "2";
-    const prefix = `${Number(departmentId)}${genderNumber}`;
-
-    for (let serial = 1; serial <= 999; serial++) {
-      const studentId = `${prefix}${String(serial).padStart(3, "0")}`;
-      const idRef = doc(db, "studentIds", studentId);
-      const existing = await getDoc(idRef);
-
-      if (existing.exists()) continue;
-
-      try {
-        await setDoc(idRef, {
-          studentId,
-          createdAt: serverTimestamp(),
-        });
-
-        return studentId;
-      } catch (error) {
-        if (error.code === "permission-denied") {
-          const checkAgain = await getDoc(idRef);
-
-          if (checkAgain.exists()) continue;
-        }
-
-        throw error;
-      }
-    }
-
-    throw new Error("আর কোনো Student ID পাওয়া যাচ্ছে না।");
+    setForm((previous) => ({
+      ...previous,
+      villageId: "",
+      customVillage: "",
+    }));
   }
 
   async function handleSubmit(event) {
     event.preventDefault();
 
-    if (submitting || loadingData || !validateForm()) return;
+    if (submitting || loading) return;
 
-    const selectedVillage = villages.find(
-      (item) => getItemId(item, "villageId") === form.villageId,
-    );
+    const name = form.name.trim();
+    const phone = normalizePhone(form.phone);
+    const villageName = customVillage
+      ? form.customVillage.trim()
+      : (() => {
+          const village = villages.find((item) => item.id === form.villageId);
+          return village?.name || village?.villageName || "";
+        })();
 
-    const selectedClass = departmentClasses.find(
-      (item) => item.classId === form.classId,
-    );
+    if (!name) return toast.error("শিক্ষার্থীর নাম লিখুন।");
 
-    const selectedBatch = departmentBatches.find(
-      (item) => item.batchId === form.batchId,
-    );
-
-    if (!selectedVillage) {
-      toast.error("নির্বাচিত গ্রাম পাওয়া যায়নি।");
-      return;
+    if (!/^01[3-9]\d{8}$/.test(phone)) {
+      return toast.error("সঠিক বাংলাদেশি মোবাইল নম্বর লিখুন।");
     }
 
-    if (isToplineCare && !selectedBatch) {
-      toast.error("নির্বাচিত Batch পাওয়া যায়নি।");
-      return;
+    if (!villageName) {
+      return toast.error("গ্রাম বা এলাকার নাম লিখুন অথবা নির্বাচন করুন।");
     }
 
-    if (!isToplineCare && !selectedClass) {
-      toast.error("নির্বাচিত শ্রেণি পাওয়া যায়নি।");
-      return;
+    if (customVillage && villageName.length > 100) {
+      return toast.error("গ্রামের নাম ১০০ অক্ষরের মধ্যে লিখুন।");
+    }
+
+    if (!department) {
+      return toast.error("বিভাগ নির্বাচন করুন।");
+    }
+
+    if (!form.gender) {
+      return toast.error("শিক্ষার্থীর লিঙ্গ নির্বাচন করুন।");
+    }
+
+    const selectedClass = classes.find((item) => item.id === form.classId);
+
+    if (!selectedClass) {
+      return toast.error(
+        isCare ? "ব্যাচ নির্বাচন করুন।" : "শ্রেণি নির্বাচন করুন।",
+      );
     }
 
     setSubmitting(true);
 
     try {
-      const studentId = await createUniqueStudentId(
-        form.departmentId,
-        form.gender,
-      );
+      // Check for an existing phone number.
+      const studentsSnapshot = await getDocs(collection(db, "students"));
 
-      const pin = generatePin();
+      const duplicate = studentsSnapshot.docs.some((item) => {
+        const student = item.data();
 
-      const studentData = {
-        studentId,
-        pin,
-        name: form.name.trim(),
-        phone: form.phone.trim(),
-        departmentId: Number(form.departmentId),
-        departmentName: getName(selectedDepartment),
-        gender: form.gender,
-        villageId: form.villageId,
-        villageName: getName(selectedVillage),
-        classId: isToplineCare ? "" : form.classId,
-        className: isToplineCare ? "" : getName(selectedClass),
-        batchId: isToplineCare ? form.batchId : "",
-        batchName: isToplineCare ? getName(selectedBatch) : "",
-        approved: false,
-        createdAt: serverTimestamp(),
-      };
-
-      await setDoc(doc(db, "students", studentId), studentData);
-
-      setCredentials({
-        name: studentData.name,
-        studentId,
-        pin,
-        departmentName: studentData.departmentName,
+        return (
+          normalizePhone(student.phoneNormalized || student.phone || "") ===
+          phone
+        );
       });
 
-      setShowPin(true);
-      setForm(initialForm);
+      if (duplicate) {
+        toast.error("এই মোবাইল নম্বর দিয়ে ইতিমধ্যে নিবন্ধন করা হয়েছে।");
+        return;
+      }
+
+      const genderNumber = form.gender === "male" ? "1" : "2";
+      const prefix = `${department.id}${genderNumber}`;
+      const pin = generatePin();
+
+      let studentId = "";
+
+      // Generate a unique student ID.
+      for (let serial = 1; serial <= 999; serial++) {
+        const candidate = `${prefix}${String(serial).padStart(3, "0")}`;
+        const studentRef = doc(db, "students", candidate);
+
+        const created = await runTransaction(db, async (transaction) => {
+          const existing = await transaction.get(studentRef);
+
+          if (existing.exists()) return false;
+
+          transaction.set(studentRef, {
+            studentId: candidate,
+            name,
+            phone: form.phone.trim(),
+            phoneNormalized: phone,
+            pin,
+
+            departmentId: department.id,
+            departmentName: department.name,
+
+            villageId: customVillage ? "" : form.villageId,
+            villageName,
+
+            gender: form.gender,
+
+            classId: isCare ? "" : selectedClass.id,
+            className: isCare ? "" : selectedClass.name,
+
+            batchId: isCare ? selectedClass.id : "",
+            batchName: isCare ? selectedClass.name : "",
+
+            approved: false,
+            isCR: false,
+            createdAt: serverTimestamp(),
+          });
+
+          return true;
+        });
+
+        if (created) {
+          studentId = candidate;
+          break;
+        }
+      }
+
+      if (!studentId) {
+        throw new Error("Student ID তৈরি করা যায়নি।");
+      }
+
+      localStorage.setItem(
+        "studentSession",
+        JSON.stringify({
+          documentId: studentId,
+          studentId,
+          name,
+          departmentId: department.id,
+          departmentName: department.name,
+          role: "student",
+        }),
+      );
 
       toast.success("নিবন্ধনের আবেদন সফলভাবে জমা হয়েছে!");
+      setForm(initialForm);
+      navigate("/portal", { replace: true });
     } catch (error) {
       console.error("Registration error:", error);
-      toast.error(error.message || "নিবন্ধন করা যায়নি। আবার চেষ্টা করুন।");
+
+      toast.error(
+        error.code === "permission-denied"
+          ? "নিবন্ধনের অনুমতি নেই। Firestore Rules পরীক্ষা করুন।"
+          : "নিবন্ধন করা যায়নি। আবার চেষ্টা করুন।",
+      );
     } finally {
       setSubmitting(false);
     }
   }
 
-  async function copyCredentials() {
-    if (!credentials) return;
-
-    const text = [
-      "TopLine Education",
-      `Name: ${credentials.name}`,
-      `Student ID: ${credentials.studentId}`,
-      `PIN: ${credentials.pin}`,
-      `Department: ${credentials.departmentName}`,
-    ].join("\n");
-
-    try {
-      await navigator.clipboard.writeText(text);
-      toast.success("Student ID ও PIN কপি হয়েছে!");
-    } catch {
-      toast.error("কপি করা যায়নি।");
-    }
-  }
-
   return (
-    <main className="relative min-h-screen overflow-hidden bg-base-200 px-3 py-6 text-base-content sm:px-5 sm:py-10">
+    <main className="relative min-h-screen overflow-hidden bg-base-200 px-4 py-8 text-base-content sm:py-12">
       {/* Background decoration */}
-      <div className="pointer-events-none absolute -left-24 top-20 h-64 w-64 rounded-full bg-primary/10 blur-3xl" />
-      <div className="pointer-events-none absolute -right-24 bottom-20 h-72 w-72 rounded-full bg-secondary/10 blur-3xl" />
+      <div className="pointer-events-none absolute -left-24 top-10 h-72 w-72 rounded-full bg-primary/10 blur-3xl" />
+      <div className="pointer-events-none absolute -right-24 bottom-0 h-80 w-80 rounded-full bg-secondary/10 blur-3xl" />
 
-      <motion.div
-        variants={fadeUp}
-        initial="hidden"
-        animate="visible"
-        transition={{ duration: 0.55, ease: "easeOut" }}
-        className="relative mx-auto w-full max-w-lg"
-      >
-        <div className="overflow-hidden rounded-3xl border border-base-300 bg-base-100 shadow-xl shadow-base-content/5">
+      <div className="relative mx-auto max-w-xl">
+        <div className="overflow-hidden rounded-3xl border border-base-300/70 bg-base-100 shadow-2xl shadow-base-content/5">
           {/* Header */}
-          <div className="relative overflow-hidden bg-gradient-to-br from-primary via-primary to-secondary px-6 py-7 text-primary-content">
-            <motion.div
-              animate={{ rotate: [0, 8, -8, 0], y: [0, -5, 0] }}
-              transition={{
-                duration: 5,
-                repeat: Infinity,
-                ease: "easeInOut",
-              }}
-              className="absolute -right-3 -top-5 select-none text-[120px] opacity-10"
-            >
-              🎓
-            </motion.div>
+          <header className="relative overflow-hidden bg-gradient-to-br from-primary to-secondary px-6 py-9 text-primary-content sm:px-9 sm:py-11">
+            <div className="pointer-events-none absolute -right-12 -top-16 h-52 w-52 rounded-full border border-white/15" />
+            <div className="pointer-events-none absolute -right-4 -top-8 h-36 w-36 rounded-full border border-white/15" />
 
-            <div className="relative flex items-center gap-4">
-              <motion.div
-                whileHover={{ rotate: -8, scale: 1.06 }}
-                className="grid h-14 w-14 shrink-0 place-items-center rounded-2xl border border-white/20 bg-white/15 text-3xl shadow-lg backdrop-blur"
-              >
-                🎓
-              </motion.div>
+            <div className="relative">
+              <p className="mb-3 text-xs font-bold uppercase tracking-[0.2em] opacity-80">
+                TopLine Education
+              </p>
 
-              <div>
-                <div className="mb-1 text-xs font-semibold tracking-widest text-white/75">
-                  TOPLINE EDUCATION
-                </div>
-                <h1 className="text-2xl font-extrabold tracking-tight sm:text-3xl">
-                  শিক্ষার্থী নিবন্ধন
-                </h1>
-                <p className="mt-1 text-sm text-white/75">
-                  নতুন যাত্রা শুরু হোক আজ থেকেই!
-                </p>
+              <h1 className="text-3xl font-extrabold tracking-tight sm:text-4xl">
+                শিক্ষার্থী নিবন্ধন
+              </h1>
+
+              <p className="mt-3 max-w-sm text-sm leading-6 opacity-85 sm:text-base">
+                প্রয়োজনীয় তথ্য দিয়ে আপনার নিবন্ধনের আবেদন সম্পন্ন করুন।
+              </p>
+
+              <div className="mt-6 inline-flex items-center gap-2 rounded-full border border-white/20 bg-white/10 px-4 py-2 text-xs font-medium backdrop-blur">
+                <span className="h-2 w-2 rounded-full bg-emerald-300" />
+                Admin-এর অনুমোদন প্রয়োজন
               </div>
             </div>
+          </header>
 
-            <div className="relative mt-5 flex items-center gap-2 text-xs text-white/80">
-              <span>🔒</span>
-              <span>নিবন্ধনের পর Admin-এর অনুমোদন প্রয়োজন</span>
-            </div>
-          </div>
+          {/* Form */}
+          <form onSubmit={handleSubmit} className="space-y-5 p-5 sm:p-9">
+            <label className="block">
+              <span className={labelClass}>
+                শিক্ষার্থীর পূর্ণ নাম <span className="text-error">*</span>
+              </span>
 
-          <div className="p-5 sm:p-7">
-            <form onSubmit={handleSubmit} className="space-y-4">
-              {/* Name */}
-              <motion.label
-                variants={fadeUp}
-                initial="hidden"
-                animate="visible"
-                transition={{ delay: 0.05 }}
-                className="form-control block"
+              <input
+                className={inputClass}
+                name="name"
+                value={form.name}
+                onChange={handleChange}
+                placeholder="আপনার পূর্ণ নাম লিখুন"
+                maxLength={100}
+                autoComplete="name"
+                required
+              />
+            </label>
+
+            <label className="block">
+              <span className={labelClass}>
+                মোবাইল নম্বর <span className="text-error">*</span>
+              </span>
+
+              <input
+                className={inputClass}
+                name="phone"
+                type="tel"
+                inputMode="tel"
+                value={form.phone}
+                onChange={handleChange}
+                placeholder="01XXXXXXXXX"
+                maxLength={20}
+                autoComplete="tel"
+                required
+              />
+
+              <span className="mt-2 block text-xs text-base-content/55">
+                একটি নম্বর দিয়ে একবারই নিবন্ধন করা যাবে।
+              </span>
+            </label>
+
+            {/* Village */}
+            <section className="rounded-2xl border border-base-300 bg-base-200/40 p-4 sm:p-5">
+              <div className="mb-4">
+                <h2 className="font-bold">গ্রাম / এলাকার তথ্য</h2>
+                <p className="mt-1 text-xs text-base-content/60">
+                  তালিকা থেকে নির্বাচন করুন অথবা নতুন নাম লিখুন।
+                </p>
+              </div>
+
+              <div className="mb-4 grid grid-cols-2 gap-2 rounded-xl bg-base-300/60 p-1">
+                <button
+                  type="button"
+                  onClick={() => handleVillageModeChange(false)}
+                  className={`rounded-lg px-3 py-2.5 text-sm font-semibold transition ${
+                    !customVillage
+                      ? "bg-base-100 text-primary shadow-sm"
+                      : "text-base-content/65 hover:text-base-content"
+                  }`}
+                >
+                  তালিকা থেকে
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => handleVillageModeChange(true)}
+                  className={`rounded-lg px-3 py-2.5 text-sm font-semibold transition ${
+                    customVillage
+                      ? "bg-base-100 text-primary shadow-sm"
+                      : "text-base-content/65 hover:text-base-content"
+                  }`}
+                >
+                  নতুন গ্রাম লিখুন
+                </button>
+              </div>
+
+              {customVillage ? (
+                <label className="block">
+                  <span className={labelClass}>
+                    গ্রামের নাম <span className="text-error">*</span>
+                  </span>
+
+                  <input
+                    className={inputClass}
+                    name="customVillage"
+                    value={form.customVillage}
+                    onChange={handleChange}
+                    placeholder="আপনার গ্রামের নাম লিখুন"
+                    maxLength={100}
+                    required
+                  />
+
+                  <p className="mt-2 text-xs text-base-content/55">
+                    আপনার দেওয়া নামটি নিবন্ধনের সঙ্গে সংরক্ষণ করা হবে।
+                  </p>
+                </label>
+              ) : (
+                <label className="block">
+                  <span className={labelClass}>
+                    গ্রাম / এলাকা <span className="text-error">*</span>
+                  </span>
+
+                  <select
+                    className={inputClass}
+                    name="villageId"
+                    value={form.villageId}
+                    onChange={handleChange}
+                    disabled={loading || villages.length === 0}
+                    required
+                  >
+                    <option value="">
+                      {loading
+                        ? "গ্রামের তথ্য লোড হচ্ছে..."
+                        : villages.length
+                          ? "গ্রাম বা এলাকা নির্বাচন করুন"
+                          : "কোনো গ্রাম পাওয়া যায়নি"}
+                    </option>
+
+                    {villages.map((item) => (
+                      <option key={item.id} value={item.id}>
+                        {item.name || item.villageName}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+              )}
+            </section>
+
+            {/* Department */}
+            <label className="block">
+              <span className={labelClass}>
+                প্রতিষ্ঠান / বিভাগ <span className="text-error">*</span>
+              </span>
+
+              <select
+                className={inputClass}
+                name="departmentId"
+                value={form.departmentId}
+                onChange={handleChange}
+                required
               >
-                <span className="mb-1.5 flex items-center gap-2 text-sm font-semibold">
-                  <span>👤</span>
-                  শিক্ষার্থীর নাম <span className="text-error">*</span>
-                </span>
-                <input
-                  className={inputClass}
-                  name="name"
-                  value={form.name}
-                  onChange={handleChange}
-                  placeholder="আপনার পূর্ণ নাম"
-                  maxLength={100}
-                  autoComplete="name"
-                  required
-                />
-              </motion.label>
+                <option value="">বিভাগ নির্বাচন করুন</option>
 
-              {/* Phone */}
-              <label className="form-control block">
-                <span className="mb-1.5 flex items-center gap-2 text-sm font-semibold">
-                  <span>📱</span>
-                  মোবাইল নম্বর <span className="text-error">*</span>
-                </span>
-                <input
-                  className={inputClass}
-                  name="phone"
-                  type="tel"
-                  value={form.phone}
-                  onChange={handleChange}
-                  placeholder="01XXXXXXXXX"
-                  maxLength={20}
-                  autoComplete="tel"
-                  required
-                />
-              </label>
+                {departmentList.map((item) => (
+                  <option key={item.id} value={item.id}>
+                    {item.name}
+                  </option>
+                ))}
+              </select>
+            </label>
 
-              {/* Village */}
-              <label className="form-control block">
-                <span className="mb-1.5 flex items-center gap-2 text-sm font-semibold">
-                  <span>📍</span>
-                  গ্রাম / এলাকা <span className="text-error">*</span>
+            {/* Class or batch */}
+            {department && (
+              <label className="block">
+                <span className={labelClass}>
+                  {isCare ? "আপনার ব্যাচ" : "আপনার শ্রেণি"}
+                  <span className="text-error"> *</span>
                 </span>
+
                 <select
                   className={inputClass}
-                  name="villageId"
-                  value={form.villageId}
+                  name="classId"
+                  value={form.classId}
                   onChange={handleChange}
-                  disabled={loadingData || villages.length === 0}
                   required
                 >
                   <option value="">
-                    {loadingData
-                      ? "গ্রামের তথ্য লোড হচ্ছে..."
-                      : villages.length
-                        ? "গ্রাম নির্বাচন করুন"
-                        : "কোনো গ্রাম পাওয়া যায়নি"}
+                    {isCare ? "ব্যাচ নির্বাচন করুন" : "শ্রেণি নির্বাচন করুন"}
                   </option>
 
-                  {villages.map((item) => (
-                    <option
-                      key={item.docId}
-                      value={getItemId(item, "villageId")}
-                    >
-                      {getName(item)}
+                  {classes.map((item) => (
+                    <option key={item.id} value={item.id}>
+                      {item.name}
                     </option>
                   ))}
                 </select>
               </label>
+            )}
 
-              {/* Department */}
-              <label className="form-control block">
-                <span className="mb-1.5 flex items-center gap-2 text-sm font-semibold">
-                  <span>🏫</span>
-                  বিভাগ <span className="text-error">*</span>
-                </span>
-                <select
-                  className={inputClass}
-                  name="departmentId"
-                  value={form.departmentId}
-                  onChange={handleChange}
-                  required
-                >
-                  <option value="">আপনার বিভাগ নির্বাচন করুন</option>
+            {/* Gender */}
+            <fieldset>
+              <legend className={`${labelClass} mb-3`}>
+                শিক্ষার্থীর লিঙ্গ <span className="text-error">*</span>
+              </legend>
 
-                  {departments.map((item) => (
-                    <option key={item.docId} value={item.id}>
-                      {getName(item)}
-                    </option>
-                  ))}
-                </select>
-              </label>
+              <div className="grid grid-cols-2 gap-3">
+                {[
+                  { value: "male", label: "ছেলে" },
+                  { value: "female", label: "মেয়ে" },
+                ].map((item) => {
+                  const selected = form.gender === item.value;
 
-              {/* Class / Batch */}
-              <AnimatePresence mode="wait">
-                {form.departmentId && (
-                  <motion.div
-                    key={form.departmentId}
-                    initial={{ opacity: 0, height: 0, y: 8 }}
-                    animate={{ opacity: 1, height: "auto", y: 0 }}
-                    exit={{ opacity: 0, height: 0, y: -8 }}
-                    transition={{ duration: 0.22 }}
-                    className="overflow-hidden"
-                  >
-                    <label className="form-control block">
-                      <span className="mb-1.5 flex items-center gap-2 text-sm font-semibold">
-                        <span>{isToplineCare ? "👥" : "📚"}</span>
-                        {isToplineCare ? "আপনার Batch" : "আপনার শ্রেণি"}
-                        <span className="text-error">*</span>
-                      </span>
-
-                      <select
-                        className={inputClass}
-                        name={isToplineCare ? "batchId" : "classId"}
-                        value={isToplineCare ? form.batchId : form.classId}
-                        onChange={handleChange}
-                        required
-                      >
-                        <option value="">
-                          {isToplineCare
-                            ? "Batch নির্বাচন করুন"
-                            : "শ্রেণি নির্বাচন করুন"}
-                        </option>
-
-                        {(isToplineCare
-                          ? departmentBatches
-                          : departmentClasses
-                        ).map((item) => (
-                          <option
-                            key={item.docId}
-                            value={isToplineCare ? item.batchId : item.classId}
-                          >
-                            {getName(item)}
-                          </option>
-                        ))}
-                      </select>
-
-                      <AnimatePresence>
-                        {(isToplineCare ? form.batchId : form.classId) && (
-                          <motion.p
-                            initial={{ opacity: 0, x: -5 }}
-                            animate={{ opacity: 1, x: 0 }}
-                            exit={{ opacity: 0 }}
-                            className="mt-2 flex items-center gap-1.5 text-xs text-success"
-                          >
-                            <span>✓</span>
-                            {isToplineCare
-                              ? "Batch নির্বাচন সম্পন্ন"
-                              : "শ্রেণি নির্বাচন সম্পন্ন"}
-                          </motion.p>
-                        )}
-                      </AnimatePresence>
-                    </label>
-                  </motion.div>
-                )}
-              </AnimatePresence>
-
-              {/* Gender */}
-              <fieldset>
-                <legend className="mb-2 text-sm font-semibold">
-                  শিক্ষার্থীর লিঙ্গ <span className="text-error">*</span>
-                </legend>
-
-                <div className="grid grid-cols-2 gap-3">
-                  {[
-                    { value: "male", label: "ছেলে", emoji: "👦" },
-                    { value: "female", label: "মেয়ে", emoji: "👧" },
-                  ].map((option) => (
-                    <motion.label
-                      key={option.value}
-                      whileTap={{ scale: 0.98 }}
-                      className={`flex cursor-pointer items-center gap-3 rounded-xl border p-3.5 transition-all duration-200 ${
-                        form.gender === option.value
-                          ? "border-primary bg-primary/5 ring-2 ring-primary/15"
-                          : "border-base-300 hover:border-primary/40"
-                      }`}
+                  return (
+                    <label
+                      key={item.value}
+                      className={`flex cursor-pointer items-center justify-center gap-3 rounded-xl border p-4 transition ${
+                        selected
+                          ? "border-primary bg-primary/10 ring-2 ring-primary/20"
+                          : "border-base-300 bg-base-100 hover:border-primary/50"
+                      } ${!department ? "cursor-not-allowed opacity-50" : ""}`}
                     >
                       <input
                         type="radio"
                         className="radio radio-primary radio-sm"
                         name="gender"
-                        value={option.value}
-                        checked={form.gender === option.value}
+                        value={item.value}
+                        checked={selected}
                         onChange={handleChange}
-                        disabled={!form.departmentId}
+                        disabled={!department}
                         required
                       />
-                      <span className="text-xl">{option.emoji}</span>
+
                       <span className="text-sm font-semibold">
-                        {option.label}
+                        {item.label}
                       </span>
-                    </motion.label>
-                  ))}
-                </div>
-              </fieldset>
+                    </label>
+                  );
+                })}
+              </div>
+            </fieldset>
 
-              {/* Submit */}
-              <motion.button
-                whileHover={{ scale: 1.015 }}
-                whileTap={{ scale: 0.985 }}
-                type="submit"
-                disabled={
-                  submitting ||
-                  loadingData ||
-                  departments.length === 0 ||
-                  villages.length === 0
-                }
-                className="btn btn-primary mt-2 w-full rounded-xl text-base shadow-lg shadow-primary/20"
+            {/* Submit */}
+            <button
+              type="submit"
+              disabled={submitting || loading}
+              className="btn btn-primary min-h-12 w-full rounded-xl text-base font-bold shadow-lg shadow-primary/15 transition hover:shadow-primary/25"
+            >
+              {submitting ? (
+                <>
+                  <span className="loading loading-spinner loading-sm" />
+                  আবেদন জমা হচ্ছে...
+                </>
+              ) : (
+                "নিবন্ধনের আবেদন করুন →"
+              )}
+            </button>
+
+            <p className="text-center text-xs leading-6 text-base-content/55">
+              আপনার তথ্য যাচাই করে Admin নিবন্ধন অনুমোদন করবেন।
+            </p>
+
+            <div className="divider text-xs text-base-content/40">অথবা</div>
+
+            <p className="text-center text-sm text-base-content/70">
+              অ্যাকাউন্ট আছে?{" "}
+              <Link
+                to="/login"
+                className="font-bold text-primary hover:underline"
               >
-                {submitting ? (
-                  <>
-                    <span className="loading loading-spinner loading-sm" />
-                    আবেদন জমা হচ্ছে...
-                  </>
-                ) : (
-                  <>
-                    নিবন্ধন করুন
-                    <span className="text-lg">→</span>
-                  </>
-                )}
-              </motion.button>
-
-              <p className="text-center text-xs leading-5 text-base-content/55">
-                আপনার তথ্য যাচাই করে Admin নিবন্ধন অনুমোদন করবেন।
-              </p>
-            </form>
-          </div>
+                লগইন করুন
+              </Link>
+            </p>
+          </form>
         </div>
 
-        <motion.footer
-          initial={{ opacity: 0 }}
-          animate={{ opacity: 1 }}
-          transition={{ delay: 0.4 }}
-          className="mt-5 text-center text-xs text-base-content/50"
-        >
-          <p>© {new Date().getFullYear()} TopLine Education</p>
-          <p className="mt-1">Developed by Jihadur Rahman Noyon</p>
-        </motion.footer>
-      </motion.div>
-
-      {/* Success modal */}
-      <AnimatePresence>
-        {credentials && (
-          <motion.div
-            className="modal modal-open z-50"
-            initial={{ opacity: 0 }}
-            animate={{ opacity: 1 }}
-            exit={{ opacity: 0 }}
-          >
-            <motion.div
-              initial={{ opacity: 0, y: 25, scale: 0.94 }}
-              animate={{ opacity: 1, y: 0, scale: 1 }}
-              exit={{ opacity: 0, y: 15, scale: 0.96 }}
-              transition={{ type: "spring", stiffness: 260, damping: 23 }}
-              className="modal-box max-h-[90vh] rounded-3xl bg-base-100 text-base-content shadow-2xl"
-            >
-              <button
-                type="button"
-                onClick={() => setCredentials(null)}
-                className="btn btn-circle btn-ghost btn-sm absolute right-3 top-3"
-                aria-label="বন্ধ করুন"
-              >
-                ✕
-              </button>
-
-              <motion.div
-                initial={{ scale: 0.5, rotate: -15 }}
-                animate={{ scale: 1, rotate: 0 }}
-                transition={{ type: "spring", delay: 0.1 }}
-                className="mx-auto mb-4 grid h-16 w-16 place-items-center rounded-2xl bg-success/10 text-4xl"
-              >
-                ✓
-              </motion.div>
-
-              <h2 className="text-center text-2xl font-extrabold">
-                আবেদন সফল হয়েছে!
-              </h2>
-
-              <p className="mt-2 text-center text-sm leading-6 text-base-content/65">
-                অভিনন্দন, {credentials.name}! আপনার নিবন্ধনের আবেদন জমা হয়েছে।
-                Admin অনুমোদন না করা পর্যন্ত লগইন করতে পারবেন না।
-              </p>
-
-              <div className="mt-6 space-y-3">
-                <div className="rounded-2xl border border-base-300 bg-base-200/60 p-4">
-                  <p className="text-xs font-semibold tracking-widest text-base-content/55">
-                    STUDENT ID
-                  </p>
-
-                  <div className="mt-1 flex items-center justify-between gap-2">
-                    <p className="break-all font-mono text-2xl font-extrabold tracking-widest">
-                      {credentials.studentId}
-                    </p>
-                    <span className="text-2xl">🎓</span>
-                  </div>
-                </div>
-
-                <div className="rounded-2xl border border-base-300 bg-base-200/60 p-4">
-                  <div className="flex items-center justify-between">
-                    <p className="text-xs font-semibold tracking-widest text-base-content/55">
-                      YOUR PIN
-                    </p>
-
-                    <button
-                      type="button"
-                      onClick={() => setShowPin((previous) => !previous)}
-                      className="btn btn-ghost btn-xs gap-1"
-                    >
-                      <span>{showPin ? "◉" : "◎"}</span>
-                      {showPin ? "লুকান" : "দেখুন"}
-                    </button>
-                  </div>
-
-                  <p className="mt-1 font-mono text-3xl font-extrabold tracking-[0.3em]">
-                    {showPin ? credentials.pin : "••••"}
-                  </p>
-                </div>
-
-                <div className="rounded-xl bg-primary/5 px-4 py-3">
-                  <p className="text-xs text-base-content/55">বিভাগ</p>
-                  <p className="mt-1 font-semibold">
-                    {credentials.departmentName}
-                  </p>
-                </div>
-              </div>
-
-              <div className="mt-5 flex flex-col gap-2 sm:flex-row">
-                <button
-                  type="button"
-                  onClick={copyCredentials}
-                  className="btn btn-primary flex-1 rounded-xl"
-                >
-                  <span>▣</span>
-                  ID ও PIN কপি করুন
-                </button>
-
-                <button
-                  type="button"
-                  onClick={() => setCredentials(null)}
-                  className="btn btn-ghost rounded-xl"
-                >
-                  বন্ধ করুন
-                </button>
-              </div>
-
-              <p className="mt-4 text-center text-xs text-base-content/45">
-                ID ও PIN নিরাপদে সংরক্ষণ করুন।
-              </p>
-            </motion.div>
-
-            <button
-              type="button"
-              aria-label="মডাল বন্ধ করুন"
-              className="modal-backdrop cursor-default"
-              onClick={() => setCredentials(null)}
-            />
-          </motion.div>
-        )}
-      </AnimatePresence>
+        <p className="mt-5 text-center text-xs text-base-content/45">
+          TopLine Education Management System
+        </p>
+      </div>
     </main>
   );
 }

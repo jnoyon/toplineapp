@@ -1,40 +1,212 @@
 import { useEffect, useMemo, useState } from "react";
 import { collection, getDocs } from "firebase/firestore";
-import toast from "react-hot-toast";
-import {
-  FiCalendar,
-  FiCheckCircle,
-  FiClock,
-  FiTrendingUp,
-} from "react-icons/fi";
+import { motion } from "framer-motion";
+
+import { departments } from "../../config/departments";
 import { db } from "../firebase/firebase.init";
 
 const MONTHLY_CLASS_TARGET = 20;
 
-function getBatchId(student) {
+const MONTH_NAMES = [
+  "জানুয়ারি",
+  "ফেব্রুয়ারি",
+  "মার্চ",
+  "এপ্রিল",
+  "মে",
+  "জুন",
+  "জুলাই",
+  "আগস্ট",
+  "সেপ্টেম্বর",
+  "অক্টোবর",
+  "নভেম্বর",
+  "ডিসেম্বর",
+];
+
+const normalizeName = (value) =>
+  String(value ?? "")
+    .trim()
+    .replace(/\s+/g, " ")
+    .toLowerCase();
+
+function getStudentDepartmentName(student) {
   return String(
-    student?.batchId ?? student?.classId ?? student?.batchDocumentId ?? "",
+    student?.departmentName ??
+      student?.department ??
+      student?.programName ??
+      "",
+  ).trim();
+}
+
+function getStudentClassName(student) {
+  return String(
+    student?.batchName ??
+      student?.className ??
+      student?.batch ??
+      student?.class ??
+      "",
+  ).trim();
+}
+
+function getDepartmentByName(student) {
+  const departmentName = normalizeName(getStudentDepartmentName(student));
+
+  if (!departmentName) return null;
+
+  return (
+    Object.values(departments).find(
+      (department) => normalizeName(department.name) === departmentName,
+    ) ?? null
   );
 }
 
-function formatDate(value) {
-  if (!value) return "—";
+function getConfiguredClassName(student, department) {
+  if (!department) return "";
 
-  const date = new Date(`${value}T12:00:00`);
+  const studentClassName = normalizeName(getStudentClassName(student));
 
-  if (Number.isNaN(date.getTime())) return value;
+  if (!studentClassName) return "";
 
-  return new Intl.DateTimeFormat("bn-BD", {
-    day: "numeric",
-    month: "short",
-    year: "numeric",
-  }).format(date);
+  const configuredClass = department.classes?.find(
+    (item) => normalizeName(item.name) === studentClassName,
+  );
+
+  return configuredClass?.name ?? "";
 }
 
-function getPercentage(completed, target) {
-  if (!target || target <= 0) return 0;
+function toDate(value) {
+  if (!value) return null;
 
-  return Math.min(100, Math.round((completed / target) * 100));
+  if (typeof value?.toDate === "function") {
+    return value.toDate();
+  }
+
+  if (value instanceof Date) {
+    return Number.isNaN(value.getTime()) ? null : value;
+  }
+
+  if (typeof value === "string" || typeof value === "number") {
+    const date = new Date(value);
+
+    return Number.isNaN(date.getTime()) ? null : date;
+  }
+
+  if (typeof value === "object" && value.seconds != null) {
+    return new Date(value.seconds * 1000);
+  }
+
+  return null;
+}
+
+function getRecordDepartmentName(record) {
+  return String(
+    record?.departmentName ?? record?.department ?? record?.programName ?? "",
+  ).trim();
+}
+
+function getRecordClassName(record) {
+  return String(
+    record?.batchName ??
+      record?.className ??
+      record?.batch ??
+      record?.class ??
+      "",
+  ).trim();
+}
+
+function getMonthNumber(record) {
+  if (record?.monthNumber != null) {
+    return Number(record.monthNumber);
+  }
+
+  const date = toDate(
+    record?.startDate ?? record?.monthStart ?? record?.createdAt,
+  );
+
+  return date ? date.getMonth() + 1 : 0;
+}
+
+function getYear(record) {
+  if (record?.year != null) {
+    return Number(record.year);
+  }
+
+  const date = toDate(
+    record?.startDate ?? record?.monthStart ?? record?.createdAt,
+  );
+
+  return date?.getFullYear() ?? new Date().getFullYear();
+}
+
+function getDateString(value) {
+  if (!value) return "";
+
+  if (typeof value === "string" && /^\d{4}-\d{2}-\d{2}/.test(value)) {
+    return value.slice(0, 10);
+  }
+
+  const date = toDate(value);
+
+  if (!date) return "";
+
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, "0");
+  const day = String(date.getDate()).padStart(2, "0");
+
+  return `${year}-${month}-${day}`;
+}
+
+function getSessionDate(session) {
+  return getDateString(
+    session?.date ??
+      session?.sessionDate ??
+      session?.attendanceDate ??
+      session?.createdAt,
+  );
+}
+
+function getMonthStart(record) {
+  return getDateString(
+    record?.startDate ?? record?.monthStart ?? record?.fromDate,
+  );
+}
+
+function getMonthEnd(record) {
+  return getDateString(record?.endDate ?? record?.monthEnd ?? record?.toDate);
+}
+
+function getMonthName(monthNumber) {
+  return MONTH_NAMES[Number(monthNumber) - 1] ?? "মাস";
+}
+
+function isCompletedSession(session) {
+  const status = normalizeName(session?.status);
+
+  return (
+    session?.completed === true ||
+    status === "completed" ||
+    status === "complete"
+  );
+}
+
+function isSessionWithinMonth(session, month) {
+  const sessionDate = getSessionDate(session);
+
+  if (!sessionDate) return false;
+
+  const startDate = getMonthStart(month);
+  const endDate = getMonthEnd(month);
+
+  if (startDate && sessionDate < startDate) return false;
+  if (endDate && sessionDate > endDate) return false;
+
+  if (!startDate && !endDate) {
+    return (
+      Number(sessionDate.slice(5, 7)) === getMonthNumber(month) &&
+      Number(sessionDate.slice(0, 4)) === getYear(month)
+    );
+  }
+
+  return true;
 }
 
 export default function MonthlyProgress({
@@ -45,21 +217,31 @@ export default function MonthlyProgress({
   const [months, setMonths] = useState([]);
   const [sessions, setSessions] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState("");
 
-  const batchId = getBatchId(student);
+  const department = useMemo(() => getDepartmentByName(student), [student]);
+
+  const departmentName = department?.name ?? "";
+
+  const className = useMemo(
+    () => getConfiguredClassName(student, department),
+    [student, department],
+  );
 
   useEffect(() => {
     let cancelled = false;
 
     async function loadProgress() {
-      if (!student || !batchId) {
+      if (!student || !departmentName || !className) {
         setMonths([]);
         setSessions([]);
+        setError("");
         setLoading(false);
         return;
       }
 
       setLoading(true);
+      setError("");
 
       try {
         const [monthSnapshot, sessionSnapshot] = await Promise.all([
@@ -69,19 +251,27 @@ export default function MonthlyProgress({
 
         if (cancelled) return;
 
+        const departmentKey = normalizeName(departmentName);
+        const classKey = normalizeName(className);
+
         const monthRecords = monthSnapshot.docs
           .map((item) => ({
             id: item.id,
             ...item.data(),
           }))
           .filter(
-            (item) =>
-              String(item.batchId ?? "") === batchId &&
-              String(item.departmentId ?? "") === "3",
+            (record) =>
+              normalizeName(getRecordDepartmentName(record)) ===
+                departmentKey &&
+              normalizeName(getRecordClassName(record)) === classKey,
           )
-          .sort(
-            (a, b) => Number(a.monthNumber ?? 0) - Number(b.monthNumber ?? 0),
-          );
+          .sort((a, b) => {
+            const yearDifference = getYear(a) - getYear(b);
+
+            return yearDifference !== 0
+              ? yearDifference
+              : getMonthNumber(a) - getMonthNumber(b);
+          });
 
         const attendanceRecords = sessionSnapshot.docs
           .map((item) => ({
@@ -89,23 +279,24 @@ export default function MonthlyProgress({
             ...item.data(),
           }))
           .filter(
-            (item) =>
-              String(item.classId ?? "") === batchId &&
-              String(item.departmentId ?? "") === "3",
+            (record) =>
+              normalizeName(getRecordDepartmentName(record)) ===
+                departmentKey &&
+              normalizeName(getRecordClassName(record)) === classKey,
           );
 
         setMonths(monthRecords);
         setSessions(attendanceRecords);
-      } catch (error) {
-        console.error("Monthly progress loading error:", error);
+      } catch (err) {
+        console.error("Monthly progress loading failed:", err);
 
         if (!cancelled) {
-          toast.error("মাসিক অগ্রগতি লোড করা যায়নি।");
+          setError("অগ্রগতির তথ্য লোড করা যায়নি।");
+          setMonths([]);
+          setSessions([]);
         }
       } finally {
-        if (!cancelled) {
-          setLoading(false);
-        }
+        if (!cancelled) setLoading(false);
       }
     }
 
@@ -114,322 +305,173 @@ export default function MonthlyProgress({
     return () => {
       cancelled = true;
     };
-  }, [student, batchId]);
+  }, [student, departmentName, className]);
 
-  const progress = useMemo(() => {
-    const activeMonth = months.find((month) => month.status === "active");
+  const currentMonth = useMemo(() => {
+    const activeMonth = months.find(
+      (month) => normalizeName(month.status) === "active",
+    );
 
-    const latestMonth = months.at(-1) ?? null;
-    const currentMonth = activeMonth ?? latestMonth;
+    return activeMonth ?? months.at(-1) ?? null;
+  }, [months]);
 
-    if (!currentMonth) {
-      return {
-        activeMonth: null,
-        latestMonth: null,
-        currentMonth: null,
-        completed: 0,
-        target: MONTHLY_CLASS_TARGET,
-        percentage: 0,
-        history: months,
-      };
-    }
+  const currentMonthSessions = useMemo(() => {
+    if (!currentMonth) return [];
 
-    let completed = Number(currentMonth.completedClasses ?? 0);
+    return sessions.filter((session) =>
+      isSessionWithinMonth(session, currentMonth),
+    );
+  }, [sessions, currentMonth]);
 
-    if (activeMonth) {
-      const uniqueSessions = new Set();
+  const completedClasses =
+    currentMonthSessions.filter(isCompletedSession).length;
 
-      sessions.forEach((session) => {
-        const date = String(session.date ?? "");
+  const target = Math.max(
+    1,
+    Number(
+      currentMonth?.plannedClasses ??
+        currentMonth?.targetClasses ??
+        currentMonth?.monthlyTarget ??
+        MONTHLY_CLASS_TARGET,
+    ),
+  );
 
-        if (
-          date >= String(activeMonth.startDate ?? "") &&
-          date <= String(activeMonth.endDate ?? "")
-        ) {
-          uniqueSessions.add(session.id);
-        }
-      });
+  const percentage = Math.min(
+    100,
+    Math.round((completedClasses / target) * 100),
+  );
 
-      completed = uniqueSessions.size;
-    }
+  const isActive = normalizeName(currentMonth?.status) === "active";
 
-    const target = Number(currentMonth.plannedClasses ?? MONTHLY_CLASS_TARGET);
-
-    return {
-      activeMonth,
-      latestMonth,
-      currentMonth,
-      completed,
-      target,
-      percentage: getPercentage(completed, target),
-      history: months,
-    };
-  }, [months, sessions]);
+  const monthLabel = currentMonth
+    ? `${getMonthName(getMonthNumber(currentMonth))} ${getYear(currentMonth)}`
+    : "";
 
   if (loading) {
     return (
-      <div className="flex items-center gap-3 rounded-2xl border border-slate-200 bg-white p-4 dark:border-slate-700 dark:bg-slate-800">
-        <span className="loading loading-spinner loading-sm text-[#E74C3C]" />
-        <p className="text-sm text-slate-500 dark:text-slate-400">
-          মাসিক অগ্রগতি লোড হচ্ছে...
-        </p>
+      <div className="animate-pulse rounded-xl border border-slate-200 bg-white p-4 dark:border-slate-700 dark:bg-slate-900">
+        <div className="h-3 w-32 rounded bg-slate-200 dark:bg-slate-700" />
+        <div className="mt-4 h-2 rounded-full bg-slate-200 dark:bg-slate-700" />
       </div>
     );
   }
 
-  if (!progress.currentMonth) {
-    return compact ? null : (
-      <section className="rounded-3xl border border-slate-200 bg-white p-6 dark:border-slate-700 dark:bg-slate-800">
-        <div className="flex items-center gap-3">
-          <span className="flex h-11 w-11 items-center justify-center rounded-xl bg-slate-100 text-[#2C3E50] dark:bg-slate-700 dark:text-white">
-            <FiCalendar size={22} />
-          </span>
+  if (!department || !className) {
+    if (compact) return null;
 
-          <div>
-            <h2 className="font-bold text-[#2C3E50] dark:text-white">
-              মাসিক অগ্রগতি
-            </h2>
-            <p className="mt-1 text-sm text-slate-500 dark:text-slate-400">
-              এখনো মাসিক ক্লাসের তথ্য পাওয়া যায়নি।
-            </p>
-          </div>
-        </div>
-      </section>
-    );
-  }
-
-  const { activeMonth, currentMonth, completed, target, percentage, history } =
-    progress;
-
-  const isActive = activeMonth?.id === currentMonth.id;
-  const remaining = Math.max(0, target - completed);
-
-  // Portal: compact progress bar only
-  if (compact) {
     return (
-      <section className="mt-5 rounded-2xl border border-white/15 bg-white/10 p-4 text-white backdrop-blur-md sm:p-5">
-        <div className="flex items-center justify-between gap-3">
-          <div className="flex items-center gap-2">
-            <FiTrendingUp size={19} className="text-emerald-300" />
-            <h2 className="text-sm font-bold sm:text-base">
-              মাসিক ক্লাসের অগ্রগতি
-            </h2>
-          </div>
-
-          <span className="text-sm font-bold">{percentage}%</span>
-        </div>
-
-        <div className="mt-4 h-2.5 overflow-hidden rounded-full bg-white/15">
-          <div
-            className="h-full rounded-full bg-gradient-to-r from-emerald-300 to-emerald-400 transition-[width] duration-700"
-            style={{ width: `${percentage}%` }}
-          />
-        </div>
-
-        <div className="mt-2 flex items-center justify-between gap-3 text-xs text-white/75">
-          <span>
-            {completed} / {target}টি ক্লাস সম্পন্ন
-          </span>
-          <span>{remaining}টি বাকি</span>
-        </div>
-      </section>
+      <div className="rounded-xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-800 dark:border-amber-900/60 dark:bg-amber-950/30 dark:text-amber-300">
+        শিক্ষার্থীর ডিপার্টমেন্ট ও ব্যাচের নাম departments.js-এর সঙ্গে মিলছে না।
+      </div>
     );
   }
 
-  // Student Profile: full monthly progress
-  return (
-    <section className="overflow-hidden rounded-3xl border border-slate-200/80 bg-white shadow-sm transition-shadow duration-300 hover:shadow-lg dark:border-slate-700 dark:bg-slate-800">
-      <div className="h-1.5 bg-gradient-to-r from-[#2C3E50] via-[#E74C3C] to-[#F39C12]" />
-
-      <div className="p-5 sm:p-7">
-        <div className="flex flex-wrap items-start justify-between gap-4">
-          <div className="flex items-center gap-3">
-            <span className="flex h-11 w-11 items-center justify-center rounded-xl bg-[#E74C3C]/10 text-[#E74C3C]">
-              <FiCalendar size={22} />
-            </span>
-
-            <div>
-              <h2 className="text-lg font-black text-[#2C3E50] dark:text-white sm:text-xl">
-                মাসিক অগ্রগতি
-              </h2>
-              <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">
-                মাসিক ক্লাসের হিসাব
-              </p>
-            </div>
-          </div>
-
-          <span
-            className={`rounded-full px-3 py-1.5 text-xs font-bold ${
-              isActive
-                ? "bg-emerald-50 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-300"
-                : "bg-slate-100 text-slate-600 dark:bg-slate-700 dark:text-slate-300"
-            }`}
-          >
-            {isActive ? "চলমান মাস" : "মাস সম্পন্ন"}
-          </span>
-        </div>
-
-        <div className="mt-7 flex flex-col gap-5 sm:flex-row sm:items-center sm:justify-between">
-          <div>
-            <p className="text-sm text-slate-500 dark:text-slate-400">
-              {isActive ? "বর্তমান মাস" : "সর্বশেষ মাস"}
-            </p>
-
-            <h3 className="mt-1 text-3xl font-black text-[#2C3E50] dark:text-white">
-              মাস {currentMonth.monthNumber}
-            </h3>
-
-            <p className="mt-2 text-xs text-slate-500 dark:text-slate-400">
-              {formatDate(currentMonth.startDate)}
-              {" — "}
-              {formatDate(currentMonth.endDate)}
-            </p>
-          </div>
-
-          <div className="flex items-center gap-4">
-            <div
-              className="relative flex h-24 w-24 shrink-0 items-center justify-center rounded-full"
-              style={{
-                background: `conic-gradient(#E74C3C ${percentage * 3.6}deg, var(--progress-track) 0deg)`,
-                "--progress-track": "rgb(226 232 240)",
-              }}
-            >
-              <div className="flex h-[76px] w-[76px] flex-col items-center justify-center rounded-full bg-white dark:bg-slate-800">
-                <span className="text-xl font-black text-[#2C3E50] dark:text-white">
-                  {percentage}%
-                </span>
-                <span className="text-[10px] text-slate-500 dark:text-slate-400">
-                  অগ্রগতি
-                </span>
-              </div>
-            </div>
-
-            <div>
-              <p className="text-2xl font-black text-[#2C3E50] dark:text-white">
-                {completed}
-                <span className="text-base font-semibold text-slate-400">
-                  {" "}
-                  / {target}
-                </span>
-              </p>
-
-              <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">
-                সম্পন্ন ক্লাস
-              </p>
-
-              <p className="mt-1 text-xs font-semibold text-[#E74C3C]">
-                {remaining}টি বাকি
-              </p>
-            </div>
-          </div>
-        </div>
-
-        <div className="mt-6 h-2.5 overflow-hidden rounded-full bg-slate-100 dark:bg-slate-700">
-          <div
-            className="h-full rounded-full bg-gradient-to-r from-[#2C3E50] to-[#E74C3C] transition-[width] duration-700"
-            style={{ width: `${percentage}%` }}
-          />
-        </div>
-
-        <div className="mt-7">
-          <div className="mb-3 flex items-center justify-between">
-            <h3 className="text-sm font-bold text-[#2C3E50] dark:text-white">
-              মাসের ইতিহাস
-            </h3>
-            <span className="text-xs text-slate-500 dark:text-slate-400">
-              {history.length}টি মাস
-            </span>
-          </div>
-
-          <div className="space-y-2">
-            {[...history]
-              .slice(-3)
-              .reverse()
-              .map((month) => {
-                const current = month.id === activeMonth?.id;
-                const monthTarget = Number(
-                  month.plannedClasses ?? MONTHLY_CLASS_TARGET,
-                );
-
-                let monthCompleted = Number(month.completedClasses ?? 0);
-
-                if (current) {
-                  const uniqueSessions = new Set(
-                    sessions
-                      .filter((session) => {
-                        const date = String(session.date ?? "");
-                        return (
-                          date >= String(month.startDate ?? "") &&
-                          date <= String(month.endDate ?? "")
-                        );
-                      })
-                      .map((session) => session.id),
-                  );
-
-                  monthCompleted = uniqueSessions.size;
-                }
-
-                const monthPercentage = getPercentage(
-                  monthCompleted,
-                  monthTarget,
-                );
-
-                return (
-                  <div
-                    key={month.id}
-                    className="flex items-center gap-3 rounded-xl bg-slate-50 p-3 dark:bg-slate-900"
-                  >
-                    <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-white text-xs font-black text-[#2C3E50] shadow-sm dark:bg-slate-700 dark:text-white">
-                      {month.monthNumber}
-                    </div>
-
-                    <div className="min-w-0 flex-1">
-                      <div className="flex items-center justify-between gap-2">
-                        <p className="text-sm font-semibold text-[#2C3E50] dark:text-white">
-                          মাস {month.monthNumber}
-                        </p>
-
-                        <span className="text-xs text-slate-500 dark:text-slate-400">
-                          {monthCompleted}/{monthTarget}
-                        </span>
-                      </div>
-
-                      <div className="mt-2 h-1.5 overflow-hidden rounded-full bg-slate-200 dark:bg-slate-700">
-                        <div
-                          className={`h-full rounded-full ${
-                            current ? "bg-[#E74C3C]" : "bg-[#2C3E50]"
-                          }`}
-                          style={{ width: `${monthPercentage}%` }}
-                        />
-                      </div>
-                    </div>
-
-                    <span
-                      className={`shrink-0 rounded-full px-2 py-1 text-[10px] font-bold ${
-                        current
-                          ? "bg-emerald-100 text-emerald-700 dark:bg-emerald-900/40 dark:text-emerald-300"
-                          : "bg-slate-200 text-slate-600 dark:bg-slate-700 dark:text-slate-300"
-                      }`}
-                    >
-                      {current ? "চলমান" : "বন্ধ"}
-                    </span>
-                  </div>
-                );
-              })}
-          </div>
-        </div>
-
-        {onViewAll && (
-          <button
-            type="button"
-            onClick={onViewAll}
-            className="mt-5 inline-flex w-full items-center justify-center gap-2 rounded-xl border border-slate-200 px-4 py-3 text-sm font-bold text-[#2C3E50] transition hover:border-[#E74C3C]/40 hover:bg-[#E74C3C]/5 hover:text-[#E74C3C] dark:border-slate-600 dark:text-white dark:hover:bg-slate-700"
-          >
-            বিস্তারিত দেখুন
-            <FiClock size={16} />
-          </button>
-        )}
+  if (error) {
+    return (
+      <div className="rounded-xl border border-red-200 bg-red-50 p-4 text-sm text-red-700 dark:border-red-900/60 dark:bg-red-950/30 dark:text-red-300">
+        {error}
       </div>
-    </section>
+    );
+  }
+
+  if (!currentMonth) {
+    if (compact) return null;
+
+    return (
+      <div className="rounded-xl border border-slate-200 bg-white p-4 text-sm text-slate-500 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-400">
+        {className} ব্যাচের মাসিক অগ্রগতির তথ্য এখনো তৈরি হয়নি।
+      </div>
+    );
+  }
+
+  return (
+    <motion.section
+      initial={{ opacity: 0, y: 8 }}
+      animate={{ opacity: 1, y: 0 }}
+      className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm transition-colors dark:border-slate-700 dark:bg-slate-900 sm:p-5"
+    >
+      {/* Heading */}
+
+      <div className="flex items-start justify-between gap-3">
+        <div className="min-w-0">
+          <p className="text-xs font-medium text-slate-500 dark:text-slate-400">
+            মাসিক ক্লাস অগ্রগতি
+          </p>
+
+          <h3 className="mt-1 truncate text-base font-bold text-slate-800 dark:text-slate-100">
+            {monthLabel}
+          </h3>
+
+          <p className="mt-1 truncate text-xs text-slate-500 dark:text-slate-400">
+            {className}
+          </p>
+        </div>
+
+        <span
+          className={`shrink-0 rounded-full px-2.5 py-1 text-xs font-semibold ${
+            isActive
+              ? "bg-emerald-50 text-emerald-700 dark:bg-emerald-400/10 dark:text-emerald-400"
+              : "bg-slate-100 text-slate-600 dark:bg-slate-800 dark:text-slate-300"
+          }`}
+        >
+          {isActive ? "চলমান" : "বন্ধ"}
+        </span>
+      </div>
+
+      {/* Progress summary */}
+
+      <div className="mt-5 flex items-end justify-between gap-3">
+        <div>
+          <p className="text-2xl font-bold tracking-tight text-slate-900 dark:text-white">
+            {completedClasses}
+            <span className="ml-1 text-sm font-medium text-slate-400 dark:text-slate-500">
+              / {target} ক্লাস
+            </span>
+          </p>
+
+          <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">
+            {percentage === 100
+              ? "মাসিক ক্লাসের লক্ষ্য পূরণ হয়েছে"
+              : `আর ${Math.max(0, target - completedClasses)}টি ক্লাস বাকি`}
+          </p>
+        </div>
+
+        <span className="text-lg font-bold tabular-nums text-blue-600 dark:text-blue-400">
+          {percentage}%
+        </span>
+      </div>
+
+      {/* Progress bar */}
+
+      <div
+        className="mt-3 h-2.5 overflow-hidden rounded-full bg-slate-100 dark:bg-slate-800"
+        role="progressbar"
+        aria-label="মাসিক ক্লাস অগ্রগতি"
+        aria-valuemin={0}
+        aria-valuemax={target}
+        aria-valuenow={Math.min(completedClasses, target)}
+      >
+        <motion.div
+          initial={{ width: 0 }}
+          animate={{ width: `${percentage}%` }}
+          transition={{ duration: 0.7, ease: "easeOut" }}
+          className={`h-full rounded-full ${
+            percentage === 100
+              ? "bg-emerald-500"
+              : "bg-gradient-to-r from-blue-600 to-sky-400 dark:from-blue-500 dark:to-cyan-400"
+          }`}
+        />
+      </div>
+
+      {onViewAll && (
+        <button
+          type="button"
+          onClick={onViewAll}
+          className="mt-4 text-xs font-semibold text-blue-600 transition hover:text-blue-700 dark:text-blue-400 dark:hover:text-blue-300"
+        >
+          বিস্তারিত দেখুন <span aria-hidden="true">→</span>
+        </button>
+      )}
+    </motion.section>
   );
 }

@@ -1,35 +1,52 @@
-import { useEffect, useMemo, useState } from "react";
-import { onAuthStateChanged } from "firebase/auth";
+import { useCallback, useEffect, useMemo, useState } from "react";
+
 import {
   collection,
   doc,
   getDoc,
   getDocs,
-  runTransaction,
+  limit,
+  query,
+  where,
+  writeBatch,
   serverTimestamp,
 } from "firebase/firestore";
-import toast from "react-hot-toast";
+
+import { onAuthStateChanged } from "firebase/auth";
+
 import {
-  FaCalendarAlt,
-  FaCheck,
-  FaClipboardCheck,
-  FaGraduationCap,
-  FaSearch,
-  FaUsers,
-} from "react-icons/fa";
+  FiCalendar,
+  FiCheckCircle,
+  FiUsers,
+  FiSearch,
+  FiSend,
+  FiShield,
+  FiAlertCircle,
+  FiRefreshCw,
+  FiUserCheck,
+  FiCheck,
+  FiX,
+} from "react-icons/fi";
+
+import toast from "react-hot-toast";
 
 import { auth, db } from "../assets/firebase/firebase.init";
 
-/* --------------------------------------------------
+import { getUserRole, isAdmin, isDepartmentHead } from "../config/permissions";
+
+import { departmentList } from "../config/departments";
+
+import { calculateCurrentMark } from "../utils/calculateCurrentMark";
+
+/* =========================================================
    Constants
--------------------------------------------------- */
+========================================================= */
 
-const SUPERADMIN_EMAIL = "jihadur51@gmail.com";
-const CARE_DEPARTMENT_ID = "03";
+const STUDENT_SESSION_KEY = "studentSession";
 
-/* --------------------------------------------------
+/* =========================================================
    Helpers
--------------------------------------------------- */
+========================================================= */
 
 const normalizeId = (value) => {
   const id = String(value ?? "").trim();
@@ -37,84 +54,11 @@ const normalizeId = (value) => {
   return /^\d+$/.test(id) ? String(Number(id)) : id;
 };
 
-const getRole = (profile) =>
-  String(profile?.role || profile?.userRole || "")
-    .trim()
-    .toLowerCase()
-    .replace(/[\s_-]/g, "");
+const getDepartmentId = (item) => normalizeId(item?.id);
 
-const isAdminRole = (role) => ["admin", "superadmin"].includes(role);
+const getClassId = (item) => String(item?.id ?? "");
 
-const isHeadRole = (role) => ["head", "departmenthead"].includes(role);
-
-const getDepartmentKey = (department) =>
-  normalizeId(department?.departmentId ?? department?.id);
-
-const getDepartmentIds = (profile) => {
-  const values = [];
-
-  if (Array.isArray(profile?.departmentIds)) {
-    values.push(...profile.departmentIds);
-  }
-
-  if (Array.isArray(profile?.departments)) {
-    values.push(
-      ...profile.departments.map((item) =>
-        typeof item === "object" ? (item.departmentId ?? item.id) : item,
-      ),
-    );
-  }
-
-  if (profile?.departmentId != null) {
-    values.push(profile.departmentId);
-  }
-
-  if (profile?.department?.departmentId != null) {
-    values.push(profile.department.departmentId);
-  }
-
-  if (profile?.department?.id != null) {
-    values.push(profile.department.id);
-  }
-
-  return [...new Set(values.map(normalizeId).filter(Boolean))];
-};
-
-const getTeacherName = (profile, user) =>
-  profile?.name ||
-  profile?.displayName ||
-  user?.displayName ||
-  user?.email ||
-  "Unknown";
-
-const getTeacherId = (profile, user) =>
-  String(profile?.teacherId || profile?.id || user?.uid || "");
-
-const getClassName = (item) =>
-  item?.className ||
-  item?.batchName ||
-  item?.name ||
-  item?.title ||
-  "Unnamed Class";
-
-const getStudentRoll = (student) =>
-  student.roll ??
-  student.rollNumber ??
-  student.studentRoll ??
-  student.studentId ??
-  student.id;
-
-const compareRolls = (a, b) => {
-  const rollA = String(getStudentRoll(a) ?? "");
-  const rollB = String(getStudentRoll(b) ?? "");
-
-  return rollA.localeCompare(rollB, undefined, {
-    numeric: true,
-    sensitivity: "base",
-  });
-};
-
-const getToday = () => {
+const getLocalDate = () => {
   const now = new Date();
 
   return [
@@ -124,273 +68,367 @@ const getToday = () => {
   ].join("-");
 };
 
-const getAttendanceId = (date, classId, studentId) =>
-  `${date}_${encodeURIComponent(normalizeId(classId))}_${encodeURIComponent(
-    normalizeId(studentId),
-  )}`;
+const isActiveStudent = (student) =>
+  student?.isActive !== false && student?.approved === true;
 
-const getSessionId = (date, departmentId, classId) =>
-  `${date}_${encodeURIComponent(normalizeId(departmentId))}_${encodeURIComponent(
-    normalizeId(classId),
-  )}`;
+const isBatchDepartment = (department) => department?.type === "batch";
 
-const getAssignedTeacherIds = (item) => {
-  const values = [
-    item.teacherId,
-    item.classTeacherId,
-    item.assignedTeacherId,
-    ...(Array.isArray(item.teacherIds) ? item.teacherIds : []),
-    ...(Array.isArray(item.assignedTeacherIds) ? item.assignedTeacherIds : []),
-    ...(Array.isArray(item.teachers)
-      ? item.teachers.map((teacher) =>
-          typeof teacher === "object"
-            ? teacher.teacherId || teacher.id || teacher.uid
-            : teacher,
-        )
-      : []),
-  ];
+const getDepartmentIds = (values) => [
+  ...new Set(
+    (Array.isArray(values) ? values : [])
+      .map((item) =>
+        typeof item === "object" ? (item.departmentId ?? item.id) : item,
+      )
+      .map(normalizeId)
+      .filter(Boolean),
+  ),
+];
 
-  return values.filter(Boolean).map(String);
-};
+const getSubmitterName = (record) =>
+  record?.takenByName ||
+  record?.teacherName ||
+  record?.submittedByName ||
+  "নাম পাওয়া যায়নি";
 
-const isTeacherAssigned = (item, profile, user) => {
-  const assignedIds = getAssignedTeacherIds(item);
+const getAttendanceDocId = (date, departmentName, className, studentDocId) =>
+  [date, departmentName, className, studentDocId]
+    .join("_")
+    .replaceAll("/", "_");
 
-  const currentIds = [user?.uid, profile?.teacherId, profile?.id]
-    .filter(Boolean)
-    .map(String);
+const getStudentGroupName = (student, department) =>
+  isBatchDepartment(department)
+    ? String(student?.batchName ?? "").trim()
+    : String(student?.className ?? "").trim();
 
-  return currentIds.some((id) => assignedIds.includes(id));
-};
-
-/**
- * Checks whether a student document is linked to the logged-in user.
- *
- * Your users and students documents must share at least one supported
- * identifier. Adjust these fields if your existing schema uses different
- * names.
- */
-const isLinkedStudent = (student, profile, uid) => {
-  const profileStudentIds = [
-    profile?.studentDocId,
-    profile?.studentId,
-    profile?.studentID,
-    profile?.student?.studentId,
-    profile?.student?.id,
-  ]
-    .filter(Boolean)
-    .map(normalizeId);
-
-  const matchesUid = [
-    student.uid,
-    student.userId,
-    student.authUid,
-    student.firebaseUid,
-  ]
-    .filter(Boolean)
-    .some((id) => String(id) === String(uid));
-
-  const matchesStudentId =
-    profileStudentIds.includes(normalizeId(student.id)) ||
-    profileStudentIds.includes(normalizeId(student.studentId));
-
-  return matchesUid || matchesStudentId;
-};
-
-/* --------------------------------------------------
-   Stat Card
--------------------------------------------------- */
-
-function StatCard({ label, value, icon: Icon, color }) {
-  return (
-    <div className="rounded-2xl border border-base-300 bg-base-100 p-4">
-      <div className="flex items-center justify-between gap-2">
-        <p className="text-sm text-base-content/60">{label}</p>
-        <Icon className={color} />
-      </div>
-
-      <p className="mt-2 text-2xl font-bold">{value}</p>
-    </div>
-  );
+function readStudentSession() {
+  try {
+    return JSON.parse(localStorage.getItem(STUDENT_SESSION_KEY) || "null");
+  } catch {
+    return null;
+  }
 }
 
-/* --------------------------------------------------
-   Main Component
--------------------------------------------------- */
+/* =========================================================
+   Component
+========================================================= */
 
 export default function AddAttendance() {
-  const [user, setUser] = useState(null);
+  const [loading, setLoading] = useState(true);
+  const [loadingStudents, setLoadingStudents] = useState(false);
+  const [checkingAttendance, setCheckingAttendance] = useState(false);
+  const [submitting, setSubmitting] = useState(false);
+
+  const [currentUser, setCurrentUser] = useState(null);
   const [profile, setProfile] = useState(null);
+  const [role, setRole] = useState("");
+
+  const [userDepartments, setUserDepartments] = useState([]);
   const [crStudent, setCrStudent] = useState(null);
 
-  const [departments, setDepartments] = useState([]);
-  const [classes, setClasses] = useState([]);
-  const [students, setStudents] = useState([]);
+  const [authError, setAuthError] = useState("");
 
-  const [departmentId, setDepartmentId] = useState("");
-  const [classId, setClassId] = useState("");
+  const [selectedDepartmentId, setSelectedDepartmentId] = useState("");
 
-  const [attendance, setAttendance] = useState({});
-  const [dressCode, setDressCode] = useState({});
+  const [selectedClassId, setSelectedClassId] = useState("");
+
+  const [date, setDate] = useState(getLocalDate());
   const [search, setSearch] = useState("");
 
-  const [pageLoading, setPageLoading] = useState(true);
-  const [studentsLoading, setStudentsLoading] = useState(false);
-  const [submitting, setSubmitting] = useState(false);
-  const [error, setError] = useState("");
+  const [students, setStudents] = useState([]);
+  const [attendance, setAttendance] = useState({});
 
-  const today = getToday();
+  const [existingAttendance, setExistingAttendance] = useState([]);
+  const [attendanceCheckError, setAttendanceCheckError] = useState("");
 
-  const role = getRole(profile);
-
-  const isSuperAdmin =
-    user?.email?.toLowerCase() === SUPERADMIN_EMAIL.toLowerCase();
-
-  const isAdmin = isSuperAdmin || isAdminRole(role);
+  const isAdminUser = role === "admin";
+  const isCR = role === "cr";
   const isTeacher = role === "teacher";
-  const isHead = isHeadRole(role);
+  const isHead = role === "departmenthead";
 
-  const isCR = crStudent?.isCR === true;
+  const canManageAttendance = isAdminUser || isCR || isTeacher || isHead;
 
-  const profileDepartmentIds = useMemo(
-    () => getDepartmentIds(profile),
-    [profile],
+  /* =========================================================
+     Allowed Departments
+  ========================================================= */
+
+  const allowedDepartments = useMemo(() => {
+    if (isAdminUser) {
+      return departmentList;
+    }
+
+    if (isCR && crStudent) {
+      return departmentList.filter(
+        (department) =>
+          department.type === "batch" &&
+          getDepartmentId(department) === normalizeId(crStudent.departmentId),
+      );
+    }
+
+    return departmentList.filter((department) =>
+      userDepartments.includes(getDepartmentId(department)),
+    );
+  }, [isAdminUser, isCR, crStudent, userDepartments]);
+
+  const selectedDepartment = useMemo(
+    () =>
+      allowedDepartments.find(
+        (department) =>
+          getDepartmentId(department) === normalizeId(selectedDepartmentId),
+      ) ?? null,
+    [allowedDepartments, selectedDepartmentId],
   );
 
-  const canManageAttendance = isAdmin || isTeacher || isHead || isCR;
+  const availableClasses = useMemo(() => {
+    if (!selectedDepartment) {
+      return [];
+    }
 
-  /* --------------------------------------------------
-     Load user, profile, departments and classes
-  -------------------------------------------------- */
+    const classes = selectedDepartment.classes ?? [];
+
+    if (!isCR || !crStudent) {
+      return classes;
+    }
+
+    // CR can only access their own Care batch.
+    return classes.filter((item) => item.id === crStudent.batchId);
+  }, [selectedDepartment, isCR, crStudent]);
+
+  const selectedClass = useMemo(
+    () =>
+      availableClasses.find(
+        (item) => getClassId(item) === String(selectedClassId),
+      ) ?? null,
+    [availableClasses, selectedClassId],
+  );
+
+  /* =========================================================
+     Authentication
+
+     IMPORTANT:
+     Student CR login is stored in localStorage.
+     It does not require Firebase Auth.
+
+     Teacher/Admin login uses Firebase Auth.
+  ========================================================= */
 
   useEffect(() => {
     let cancelled = false;
 
-    const unsubscribe = onAuthStateChanged(auth, async (currentUser) => {
+    const unsubscribe = onAuthStateChanged(auth, async (user) => {
       if (cancelled) return;
 
-      setUser(currentUser);
+      setLoading(true);
+      setAuthError("");
+      setCurrentUser(user);
       setProfile(null);
+      setRole("");
+      setUserDepartments([]);
       setCrStudent(null);
-      setDepartments([]);
-      setClasses([]);
-      setError("");
-      setPageLoading(true);
 
-      if (!currentUser) {
-        setError("এই পেজ ব্যবহার করতে লগইন করুন।");
-        setPageLoading(false);
-        return;
-      }
+      setSelectedDepartmentId("");
+      setSelectedClassId("");
+
+      setStudents([]);
+      setAttendance({});
+      setExistingAttendance([]);
+      setAttendanceCheckError("");
 
       try {
-        const profileSnapshot = await getDoc(doc(db, "users", currentUser.uid));
+        /* -----------------------------------------------
+             1. Check Student Session FIRST
 
-        if (cancelled) return;
+             Student login does not use Firebase Auth.
+          ----------------------------------------------- */
 
-        if (!profileSnapshot.exists()) {
-          setError("আপনার user profile পাওয়া যায়নি।");
-          setPageLoading(false);
-          return;
-        }
+        const session = readStudentSession();
 
-        const userProfile = {
-          ...profileSnapshot.data(),
-          id: profileSnapshot.id,
-        };
+        if (session?.documentId) {
+          const studentRef = doc(db, "students", session.documentId);
 
-        const currentRole = getRole(userProfile);
-
-        const currentIsAdmin =
-          currentUser.email?.toLowerCase() === SUPERADMIN_EMAIL.toLowerCase() ||
-          isAdminRole(currentRole);
-
-        const currentIsTeacher = currentRole === "teacher";
-        const currentIsHead = isHeadRole(currentRole);
-
-        let linkedCRStudent = null;
-
-        /*
-         * Non-admin, non-teacher and non-head users are checked
-         * against the students collection to determine CR status.
-         */
-        if (!currentIsAdmin && !currentIsTeacher && !currentIsHead) {
-          const studentSnapshot = await getDocs(collection(db, "students"));
+          const snapshot = await getDoc(studentRef);
 
           if (cancelled) return;
 
-          linkedCRStudent = studentSnapshot.docs
-            .map((item) => ({
-              ...item.data(),
-              id: item.id,
-            }))
-            .find(
-              (student) =>
-                student.isCR === true &&
-                normalizeId(student.departmentId) === CARE_DEPARTMENT_ID &&
-                Boolean(student.batchId) &&
-                isLinkedStudent(student, userProfile, currentUser.uid),
-            );
-        }
+          if (!snapshot.exists()) {
+            localStorage.removeItem(STUDENT_SESSION_KEY);
 
-        const currentIsCR = linkedCRStudent?.isCR === true;
+            setAuthError("শিক্ষার্থীর তথ্য পাওয়া যায়নি। আবার লগইন করুন।");
 
-        if (
-          !currentIsAdmin &&
-          !currentIsTeacher &&
-          !currentIsHead &&
-          !currentIsCR
-        ) {
-          setProfile(userProfile);
-          setError(
-            "এই পেজ ব্যবহারের অনুমতি শুধু Admin, Teacher, Head ও অনুমোদিত CR-এর রয়েছে।",
+            return;
+          }
+
+          const student = {
+            docId: snapshot.id,
+            ...snapshot.data(),
+          };
+
+          const department = departmentList.find(
+            (item) =>
+              item.type === "batch" &&
+              getDepartmentId(item) === normalizeId(student.departmentId),
           );
-          setPageLoading(false);
+
+          const ownBatch = department?.classes?.find(
+            (item) => item.id === student.batchId,
+          );
+
+          if (
+            student.isCR !== true ||
+            !isActiveStudent(student) ||
+            !department ||
+            !ownBatch
+          ) {
+            console.warn("CR verification failed:", {
+              isCR: student.isCR,
+              approved: student.approved,
+              isActive: student.isActive,
+              departmentId: student.departmentId,
+              batchId: student.batchId,
+              departmentFound: Boolean(department),
+              batchFound: Boolean(ownBatch),
+            });
+
+            setAuthError(
+              "শুধু সক্রিয় ও অনুমোদিত CR নিজের কেয়ার ব্যাচের উপস্থিতি নিতে পারবেন।",
+            );
+
+            return;
+          }
+
+          setProfile({
+            ...student,
+            email: "",
+          });
+
+          setCrStudent(student);
+          setRole("cr");
+
+          setUserDepartments([getDepartmentId(department)]);
+
           return;
         }
 
-        setProfile(userProfile);
-        setCrStudent(linkedCRStudent);
+        /* -----------------------------------------------
+             2. Firebase Auth required for staff
+          ----------------------------------------------- */
 
-        const [departmentSnapshot, classSnapshot] = await Promise.all([
-          getDocs(collection(db, "departments")),
-          getDocs(collection(db, "classes")),
-        ]);
+        if (!user) {
+          setAuthError("উপস্থিতি পরিচালনার জন্য লগইন করুন।");
+
+          return;
+        }
+
+        /* -----------------------------------------------
+             3. Admin
+          ----------------------------------------------- */
+
+        if (isAdmin(user.email) || getUserRole(user) === "admin") {
+          setProfile({
+            uid: user.uid,
+            name: user.displayName || "Admin",
+            email: user.email || "",
+          });
+
+          setRole("admin");
+
+          setUserDepartments(departmentList.map(getDepartmentId));
+
+          return;
+        }
+
+        /* -----------------------------------------------
+             4. Teacher / Department Head
+          ----------------------------------------------- */
+
+        const teacherSnapshot = await getDocs(
+          query(
+            collection(db, "teachers"),
+            where("uid", "==", user.uid),
+            limit(1),
+          ),
+        );
 
         if (cancelled) return;
 
-        const departmentData = departmentSnapshot.docs.map((item) => ({
-          ...item.data(),
-          id: item.id,
-        }));
+        if (teacherSnapshot.empty) {
+          setAuthError(
+            "শিক্ষক প্রোফাইল পাওয়া যায়নি। Admin-এর সঙ্গে যোগাযোগ করুন।",
+          );
 
-        const classData = classSnapshot.docs.map((item) => ({
-          ...item.data(),
-          id: item.id,
-        }));
+          return;
+        }
 
-        setDepartments(
-          departmentData.filter((item) => item.isActive !== false),
+        const teacherDoc = teacherSnapshot.docs[0];
+
+        const teacher = {
+          docId: teacherDoc.id,
+          ...teacherDoc.data(),
+        };
+
+        if (teacher.isActive !== true) {
+          setAuthError("আপনার শিক্ষক অ্যাকাউন্ট সক্রিয় নয়।");
+
+          return;
+        }
+
+        if (teacher.accountAccess !== true) {
+          setAuthError("আপনার অ্যাকাউন্টে প্রবেশের অনুমতি বন্ধ রয়েছে।");
+
+          return;
+        }
+
+        const detectedRole = getUserRole({
+          email: user.email,
+          role: teacher.role,
+        });
+
+        const headIds = getDepartmentIds(teacher.departmentHeadOf);
+
+        const teacherIds = getDepartmentIds(teacher.departments);
+
+        const departmentHead =
+          isDepartmentHead(user.email) ||
+          headIds.length > 0 ||
+          detectedRole === "departmenthead";
+
+        const permittedDepartments = departmentHead
+          ? [...new Set([...teacherIds, ...headIds])]
+          : teacherIds;
+
+        if (!permittedDepartments.length) {
+          setAuthError("আপনার প্রোফাইলে কোনো বিভাগ নির্ধারিত নেই।");
+
+          return;
+        }
+
+        setProfile({
+          ...teacher,
+          uid: user.uid,
+          email: user.email || teacher.email || "",
+        });
+
+        setRole(
+          departmentHead
+            ? "departmenthead"
+            : detectedRole === "teacher"
+              ? "teacher"
+              : "",
         );
 
-        setClasses(classData);
+        setUserDepartments(permittedDepartments);
 
-        const allowedIds = getDepartmentIds(userProfile);
-
-        if (!currentIsAdmin && !currentIsCR && !allowedIds.length) {
-          setError(
-            "আপনার user profile-এ departmentId বা departmentIds নির্ধারিত নেই।",
-          );
+        if (!departmentHead && detectedRole !== "teacher") {
+          setAuthError("আপনার এই পেজ ব্যবহারের অনুমতি নেই।");
         }
-      } catch (err) {
-        console.error("Attendance initialization error:", err);
+      } catch (error) {
+        console.error("Attendance authentication error:", error);
 
         if (!cancelled) {
-          setError("তথ্য লোড করা যায়নি। Firebase permissions পরীক্ষা করুন।");
+          setAuthError("অ্যাকাউন্ট যাচাই করা যায়নি। আবার চেষ্টা করুন।");
         }
       } finally {
         if (!cancelled) {
-          setPageLoading(false);
+          setLoading(false);
         }
       }
     });
@@ -401,856 +439,897 @@ export default function AddAttendance() {
     };
   }, []);
 
-  /* --------------------------------------------------
-     Departments visible to current user
-  -------------------------------------------------- */
-
-  const visibleDepartments = useMemo(() => {
-    if (isAdmin) return departments;
-
-    // A CR can only access TopLine Care.
-    if (isCR) {
-      return departments.filter(
-        (department) => getDepartmentKey(department) === CARE_DEPARTMENT_ID,
-      );
-    }
-
-    return departments.filter((department) => {
-      const key = getDepartmentKey(department);
-      const documentId = normalizeId(department.id);
-
-      return (
-        profileDepartmentIds.includes(key) ||
-        profileDepartmentIds.includes(documentId)
-      );
-    });
-  }, [departments, isAdmin, isCR, profileDepartmentIds]);
-
-  const showDepartmentSelect =
-    !isCR && (isAdmin || visibleDepartments.length > 1);
-
-  const selectedDepartment = visibleDepartments.find(
-    (item) => getDepartmentKey(item) === normalizeId(departmentId),
-  );
-
-  const departmentUsesDressCode = normalizeId(departmentId) === "1";
-
-  /* --------------------------------------------------
-     Automatically select department and CR batch
-  -------------------------------------------------- */
+  /* =========================================================
+     Initial Department / Batch
+  ========================================================= */
 
   useEffect(() => {
-    if (isCR) {
-      setDepartmentId(CARE_DEPARTMENT_ID);
-      setClassId(crStudent?.batchId || "");
+    if (!allowedDepartments.length) {
+      setSelectedDepartmentId("");
+      setSelectedClassId("");
       return;
     }
 
-    if (isAdmin) return;
+    const exists = allowedDepartments.some(
+      (department) =>
+        getDepartmentId(department) === normalizeId(selectedDepartmentId),
+    );
 
-    if (visibleDepartments.length === 1) {
-      setDepartmentId(getDepartmentKey(visibleDepartments[0]));
-    } else if (visibleDepartments.length === 0) {
-      setDepartmentId("");
-    } else if (
-      !visibleDepartments.some(
-        (item) => getDepartmentKey(item) === normalizeId(departmentId),
-      )
-    ) {
-      setDepartmentId("");
+    if (exists) return;
+
+    const department = allowedDepartments[0];
+
+    setSelectedDepartmentId(getDepartmentId(department));
+
+    if (isCR && crStudent) {
+      const ownBatch = department.classes?.find(
+        (item) => item.id === crStudent.batchId,
+      );
+
+      setSelectedClassId(ownBatch ? getClassId(ownBatch) : "");
+    } else {
+      setSelectedClassId(getClassId(department.classes?.[0]));
     }
-  }, [isAdmin, isCR, crStudent, visibleDepartments, departmentId]);
-
-  /* --------------------------------------------------
-     Filter classes/batches by department and role
-  -------------------------------------------------- */
-
-  const availableClasses = useMemo(() => {
-    if (!departmentId || !canManageAttendance) return [];
-
-    return classes.filter((item) => {
-      const matchesDepartment =
-        normalizeId(item.departmentId) === normalizeId(departmentId);
-
-      if (!matchesDepartment || item.isActive === false) {
-        return false;
-      }
-
-      if (isCR) {
-        return (
-          normalizeId(item.departmentId) === CARE_DEPARTMENT_ID &&
-          item.type === "batch" &&
-          normalizeId(item.id) === normalizeId(crStudent?.batchId)
-        );
-      }
-
-      if (isAdmin) return true;
-
-      if (isTeacher) {
-        return isTeacherAssigned(item, profile, user);
-      }
-
-      if (isHead) {
-        return true;
-      }
-
-      return false;
-    });
-  }, [
-    classes,
-    departmentId,
-    canManageAttendance,
-    isAdmin,
-    isTeacher,
-    isHead,
-    isCR,
-    crStudent,
-    profile,
-    user,
-  ]);
-
-  /* --------------------------------------------------
-     Load students for selected class/batch
-  -------------------------------------------------- */
+  }, [allowedDepartments, selectedDepartmentId, isCR, crStudent]);
 
   useEffect(() => {
-    let cancelled = false;
+    if (!availableClasses.length) {
+      setSelectedClassId("");
+      return;
+    }
 
-    const loadStudents = async () => {
-      if (!departmentId || !classId) {
-        setStudents([]);
-        setAttendance({});
-        setDressCode({});
-        return;
-      }
+    const exists = availableClasses.some(
+      (item) => getClassId(item) === String(selectedClassId),
+    );
 
-      setStudentsLoading(true);
-      setError("");
+    if (!exists) {
+      setSelectedClassId(getClassId(availableClasses[0]));
+    }
+  }, [availableClasses, selectedClassId]);
 
-      try {
-        const selectedClass = availableClasses.find(
-          (item) => item.id === classId,
+  /* =========================================================
+     Load Students
+  ========================================================= */
+
+  const loadStudents = useCallback(async () => {
+    if (!selectedDepartment || !selectedClass) {
+      setStudents([]);
+      setAttendance({});
+      return;
+    }
+
+    setLoadingStudents(true);
+
+    try {
+      const snapshot = await getDocs(collection(db, "students"));
+
+      const list = snapshot.docs
+        .map((item) => ({
+          docId: item.id,
+          ...item.data(),
+        }))
+        .filter(
+          (student) =>
+            isActiveStudent(student) &&
+            normalizeId(student.departmentId) ===
+              getDepartmentId(selectedDepartment) &&
+            getStudentGroupName(student, selectedDepartment) ===
+              selectedClass.name,
+        )
+        .sort((a, b) =>
+          String(a.studentId ?? a.name ?? "").localeCompare(
+            String(b.studentId ?? b.name ?? ""),
+            "bn",
+            { numeric: true },
+          ),
         );
 
-        if (!selectedClass) {
-          setStudents([]);
-          setError("নির্বাচিত শ্রেণি/ব্যাচ আপনার অনুমোদিত তালিকায় নেই।");
-          return;
-        }
+      setStudents(list);
 
-        const studentSnapshot = await getDocs(collection(db, "students"));
+      setAttendance(
+        Object.fromEntries(list.map((student) => [student.docId, true])),
+      );
+    } catch (error) {
+      console.error("Load students error:", error);
 
-        if (cancelled) return;
+      toast.error("শিক্ষার্থীদের তালিকা লোড করা যায়নি।");
 
-        const isBatch = selectedClass.type === "batch";
+      setStudents([]);
+      setAttendance({});
+    } finally {
+      setLoadingStudents(false);
+    }
+  }, [selectedDepartment, selectedClass]);
 
-        const studentData = studentSnapshot.docs
-          .map((item) => ({
-            ...item.data(),
-            id: item.id,
-          }))
-          .filter((student) => {
-            const matchesDepartment =
-              normalizeId(student.departmentId) === normalizeId(departmentId);
-
-            const groupValue = isBatch ? student.batchId : student.classId;
-
-            const matchesClass =
-              normalizeId(groupValue) === normalizeId(classId);
-
-            const isActive =
-              student.isActive !== false && student.status !== "disabled";
-
-            return matchesDepartment && matchesClass && isActive;
-          })
-          .sort(compareRolls);
-
-        setStudents(studentData);
-
-        setAttendance(
-          Object.fromEntries(studentData.map((student) => [student.id, true])),
-        );
-
-        setDressCode(
-          Object.fromEntries(studentData.map((student) => [student.id, true])),
-        );
-      } catch (err) {
-        console.error("Load students error:", err);
-
-        if (!cancelled) {
-          setStudents([]);
-          setError(
-            "শিক্ষার্থীদের তালিকা লোড করা যায়নি। Firebase permissions পরীক্ষা করুন।",
-          );
-        }
-      } finally {
-        if (!cancelled) {
-          setStudentsLoading(false);
-        }
-      }
-    };
-
+  useEffect(() => {
     loadStudents();
+  }, [loadStudents]);
 
-    return () => {
-      cancelled = true;
-    };
-  }, [departmentId, classId, availableClasses]);
+  /* =========================================================
+     Check Existing Attendance
+  ========================================================= */
 
-  /* --------------------------------------------------
-     Search and counts
-  -------------------------------------------------- */
+  const checkExistingAttendance = useCallback(async () => {
+    if (!selectedDepartment || !selectedClass || !date) {
+      setExistingAttendance([]);
+      setAttendanceCheckError("");
+      return;
+    }
+
+    setCheckingAttendance(true);
+    setAttendanceCheckError("");
+
+    try {
+      const snapshot = await getDocs(
+        query(collection(db, "attendance"), where("date", "==", date)),
+      );
+
+      const records = snapshot.docs
+        .map((item) => ({
+          docId: item.id,
+          ...item.data(),
+        }))
+        .filter(
+          (item) =>
+            normalizeId(item.departmentId) ===
+              getDepartmentId(selectedDepartment) &&
+            String(item.classId ?? "") === getClassId(selectedClass),
+        );
+
+      setExistingAttendance(records);
+    } catch (error) {
+      console.error("Check attendance error:", error);
+
+      setExistingAttendance([]);
+
+      setAttendanceCheckError(
+        "আগের উপস্থিতি যাচাই করা যায়নি। সংযোগ ও Firestore Rules পরীক্ষা করুন।",
+      );
+    } finally {
+      setCheckingAttendance(false);
+    }
+  }, [selectedDepartment, selectedClass, date]);
+
+  useEffect(() => {
+    checkExistingAttendance();
+  }, [checkExistingAttendance]);
+
+  /* =========================================================
+     Search / Statistics
+  ========================================================= */
 
   const filteredStudents = useMemo(() => {
     const term = search.trim().toLowerCase();
 
     if (!term) return students;
 
-    return students.filter((student) => {
-      const values = [
-        student.name,
-        student.studentName,
-        student.studentId,
-        student.roll,
-        student.rollNumber,
-      ];
-
-      return values.some((value) =>
-        String(value ?? "")
+    return students.filter(
+      (student) =>
+        String(student.name ?? "")
+          .toLowerCase()
+          .includes(term) ||
+        String(student.studentId ?? "")
           .toLowerCase()
           .includes(term),
-      );
-    });
+    );
   }, [students, search]);
 
   const presentCount = students.filter(
-    (student) => attendance[student.id] !== false,
+    (student) => attendance[student.docId] === true,
   ).length;
 
   const absentCount = students.length - presentCount;
 
-  /* --------------------------------------------------
-     Change handlers
-  -------------------------------------------------- */
+  const alreadyTaken = existingAttendance.length > 0;
+
+  const takenBy = useMemo(() => {
+    const record = existingAttendance.find(
+      (item) => item.takenByName || item.teacherName,
+    );
+
+    return record ? getSubmitterName(record) : "";
+  }, [existingAttendance]);
+
+  /* =========================================================
+     Selection Handlers
+  ========================================================= */
 
   const handleDepartmentChange = (value) => {
-    setDepartmentId(value);
-    setClassId("");
+    if (isCR) return;
+
+    setSelectedDepartmentId(value);
+    setSelectedClassId("");
+
     setStudents([]);
     setAttendance({});
-    setDressCode({});
+    setExistingAttendance([]);
+    setAttendanceCheckError("");
     setSearch("");
-    setError("");
   };
 
   const handleClassChange = (value) => {
-    if (isCR && normalizeId(value) !== normalizeId(crStudent?.batchId)) {
-      toast.error("আপনি শুধু নিজের ব্যাচ নির্বাচন করতে পারবেন।");
+    if (isCR) return;
+
+    setSelectedClassId(value);
+
+    setStudents([]);
+    setAttendance({});
+    setExistingAttendance([]);
+    setAttendanceCheckError("");
+    setSearch("");
+  };
+
+  const markAll = (present) => {
+    if (alreadyTaken || checkingAttendance) return;
+
+    setAttendance(
+      Object.fromEntries(students.map((student) => [student.docId, present])),
+    );
+  };
+
+  const toggleStudent = (studentDocId) => {
+    if (alreadyTaken || checkingAttendance || attendanceCheckError) {
       return;
     }
 
-    setClassId(value);
-    setSearch("");
-    setError("");
+    setAttendance((previous) => ({
+      ...previous,
+      [studentDocId]: !previous[studentDocId],
+    }));
   };
 
-  const toggleAllAttendance = (checked) => {
-    setAttendance(
-      Object.fromEntries(students.map((student) => [student.id, checked])),
-    );
-  };
-
-  const toggleAllDressCode = (checked) => {
-    setDressCode(
-      Object.fromEntries(students.map((student) => [student.id, checked])),
-    );
-  };
-
-  /* --------------------------------------------------
-     Submit attendance
-  -------------------------------------------------- */
+  /* =========================================================
+     Save Attendance + Recalculate Current Mark
+  ========================================================= */
 
   const handleSubmit = async () => {
-    if (submitting) return;
-
-    if (!user || !profile) {
-      toast.error("প্রথমে লগইন করুন।");
-      return;
-    }
-
     if (!canManageAttendance) {
       toast.error("আপনার উপস্থিতি নেওয়ার অনুমতি নেই।");
       return;
     }
 
-    if (!departmentId || !classId) {
-      toast.error("বিভাগ ও শ্রেণি/ব্যাচ নির্বাচন করুন।");
+    if (!selectedDepartment || !selectedClass || !date) {
+      toast.error("বিভাগ, শ্রেণি/ব্যাচ ও তারিখ নির্বাচন করুন।");
+      return;
+    }
+
+    if (date > getLocalDate()) {
+      toast.error("ভবিষ্যতের তারিখে উপস্থিতি নেওয়া যাবে না।");
       return;
     }
 
     if (!students.length) {
-      toast.error("এই শ্রেণি/ব্যাচে কোনো শিক্ষার্থী পাওয়া যায়নি।");
+      toast.error("কোনো সক্রিয় শিক্ষার্থী পাওয়া যায়নি।");
       return;
     }
 
-    if (students.length > 450) {
-      toast.error("একবারে সর্বোচ্চ ৪৫০ জন শিক্ষার্থীর উপস্থিতি নেওয়া যাবে।");
+    if (attendanceCheckError) {
+      toast.error("আগের উপস্থিতি যাচাই করা যায়নি।");
       return;
     }
 
-    const selectedClass = availableClasses.find((item) => item.id === classId);
-
-    if (!selectedClass) {
-      toast.error("এই শ্রেণি/ব্যাচে আপনার অনুমতি নেই।");
+    if (checkingAttendance) {
+      toast.error("আগের উপস্থিতি যাচাই শেষ হওয়া পর্যন্ত অপেক্ষা করুন।");
       return;
     }
 
-    // CR must never submit attendance for another batch.
-    if (
-      isCR &&
-      (normalizeId(departmentId) !== CARE_DEPARTMENT_ID ||
-        selectedClass.type !== "batch" ||
-        normalizeId(crStudent?.batchId) !== normalizeId(classId))
-    ) {
-      toast.error("আপনি শুধু নিজের TopLine Care ব্যাচের উপস্থিতি নিতে পারবেন।");
+    if (alreadyTaken) {
+      toast.error(
+        `এই দিনের উপস্থিতি আগেই নেওয়া হয়েছে${takenBy ? `: ${takenBy}` : ""}।`,
+      );
       return;
     }
 
-    const isCareBatch =
-      normalizeId(departmentId) === CARE_DEPARTMENT_ID &&
-      selectedClass.type === "batch";
+    const departmentName = selectedDepartment.name;
+    const className = selectedClass.name;
 
-    let activeMonthRecord = null;
+    const departmentId = getDepartmentId(selectedDepartment);
 
-    /*
-     * Find the active monthly record for TopLine Care batches.
-     * The actual active status is checked again inside the transaction.
-     */
-    if (isCareBatch) {
-      try {
-        const monthSnapshot = await getDocs(collection(db, "batchMonthStates"));
+    const classId = getClassId(selectedClass);
 
-        const activeMonths = monthSnapshot.docs
-          .map((item) => ({
-            id: item.id,
-            ...item.data(),
-          }))
-          .filter(
-            (month) =>
-              normalizeId(month.batchId) === normalizeId(classId) &&
-              normalizeId(month.departmentId) === CARE_DEPARTMENT_ID &&
-              month.status === "active",
-          );
+    if (!isAdminUser && !userDepartments.includes(departmentId)) {
+      toast.error("এই বিভাগের উপস্থিতি নেওয়ার অনুমতি নেই।");
+      return;
+    }
 
-        if (activeMonths.length !== 1) {
-          toast.error(
-            activeMonths.length === 0
-              ? "এই ব্যাচের কোনো মাস চালু নেই। অ্যাডমিনকে মাস শুরু করতে বলুন।"
-              : "এই ব্যাচে একাধিক চালু মাস পাওয়া গেছে। অ্যাডমিনের সহায়তা নিন।",
-          );
-          return;
-        }
+    /* -----------------------------------------------
+       Re-verify CR's own batch
+    ----------------------------------------------- */
 
-        activeMonthRecord = activeMonths[0];
+    if (isCR) {
+      const session = readStudentSession();
 
-        if (
-          today < activeMonthRecord.startDate ||
-          today > activeMonthRecord.endDate
-        ) {
-          toast.error("আজকের তারিখ চালু মাসের সময়সীমার বাইরে।");
-          return;
-        }
-      } catch (err) {
-        console.error("Load active month error:", err);
-
+      if (
+        !crStudent ||
+        !session?.documentId ||
+        session.documentId !== crStudent.docId ||
+        crStudent.isCR !== true ||
+        !isActiveStudent(crStudent) ||
+        normalizeId(crStudent.departmentId) !== departmentId ||
+        crStudent.batchId !== classId ||
+        selectedDepartment.type !== "batch"
+      ) {
         toast.error(
-          "মাসের তথ্য যাচাই করা যায়নি। Firebase permissions পরীক্ষা করুন।",
+          "আপনি শুধু নিজের কেয়ার ব্যাচের উপস্থিতি নিতে পারবেন। আবার লগইন করুন।",
         );
+
         return;
       }
     }
 
-    const teacherId = getTeacherId(profile, user);
-    const teacherName = getTeacherName(profile, user);
-
-    const sessionId = getSessionId(today, departmentId, classId);
-
-    const sessionRef = doc(db, "attendanceSessions", sessionId);
-
-    const attendanceRefs = students.map((student) => {
-      const studentIdentifier = student.studentId || student.id;
-
-      return {
-        student,
-        ref: doc(
-          db,
-          "attendance",
-          getAttendanceId(today, classId, studentIdentifier),
-        ),
-      };
-    });
-
     setSubmitting(true);
 
     try {
-      await runTransaction(db, async (transaction) => {
-        /*
-         * Read the session and month before writing anything.
-         */
-        const sessionSnapshot = await transaction.get(sessionRef);
+      /* -----------------------------------------------
+         Recheck existing attendance
+      ----------------------------------------------- */
 
-        if (sessionSnapshot.exists()) {
-          const duplicateError = new Error("ATTENDANCE_ALREADY_EXISTS");
+      const duplicateSnapshot = await getDocs(
+        query(collection(db, "attendance"), where("date", "==", date)),
+      );
 
-          duplicateError.code = "attendance/already-exists";
-          throw duplicateError;
-        }
+      const duplicateExists = duplicateSnapshot.docs.some((item) => {
+        const record = item.data();
 
-        if (isCareBatch && activeMonthRecord) {
-          const monthRef = doc(db, "batchMonthStates", activeMonthRecord.id);
+        return (
+          normalizeId(record.departmentId) === departmentId &&
+          String(record.classId ?? "") === classId
+        );
+      });
 
-          const monthSnapshot = await transaction.get(monthRef);
+      if (duplicateExists) {
+        await checkExistingAttendance();
 
-          if (
-            !monthSnapshot.exists() ||
-            monthSnapshot.data().status !== "active" ||
-            today < monthSnapshot.data().startDate ||
-            today > monthSnapshot.data().endDate
-          ) {
-            throw new Error("BATCH_MONTH_NOT_ACTIVE");
-          }
-        }
+        toast.error("এই দিনের উপস্থিতি ইতিমধ্যে সংরক্ষিত হয়েছে।");
 
-        /*
-         * Read every attendance record before writing.
-         */
-        const recordSnapshots = [];
+        return;
+      }
 
-        for (const item of attendanceRefs) {
-          recordSnapshots.push(await transaction.get(item.ref));
-        }
+      /* -----------------------------------------------
+         Submitter details
+      ----------------------------------------------- */
 
-        if (recordSnapshots.some((snapshot) => snapshot.exists())) {
-          const duplicateError = new Error("ATTENDANCE_ALREADY_EXISTS");
+      const submitterName =
+        profile?.name ||
+        currentUser?.displayName ||
+        currentUser?.email ||
+        "নাম পাওয়া যায়নি";
 
-          duplicateError.code = "attendance/already-exists";
-          throw duplicateError;
-        }
+      const submitterUid = currentUser?.uid || crStudent?.docId || "";
 
-        /*
-         * Create one session per date, department and batch/class.
-         * This session represents one completed class.
-         */
-        transaction.set(sessionRef, {
-          date: today,
-          departmentId: normalizeId(departmentId),
-          departmentName:
-            selectedDepartment?.name || selectedDepartment?.englishName || "",
+      const submitterEmail = currentUser?.email || "";
+
+      const submitterRole = isCR ? "student" : role;
+
+      /* -----------------------------------------------
+         Save attendance
+      ----------------------------------------------- */
+
+      const batch = writeBatch(db);
+
+      students.forEach((student) => {
+        const present = attendance[student.docId] === true;
+
+        const attendanceId = getAttendanceDocId(
+          date,
+          departmentName,
+          className,
+          student.docId,
+        );
+
+        const attendanceRef = doc(db, "attendance", attendanceId);
+
+        batch.set(attendanceRef, {
+          date,
+
+          departmentName,
+          className,
+
+          departmentId,
           classId,
-          className: getClassName(selectedClass),
-          teacherId,
-          teacherName,
-          studentCount: students.length,
-          presentCount,
-          absentCount,
-          ...(isCareBatch && activeMonthRecord
+
+          studentDocId: student.docId,
+          studentId: String(student.studentId ?? ""),
+          studentName: student.name ?? "",
+
+          status: present ? "present" : "absent",
+          present,
+
+          ...(isBatchDepartment(selectedDepartment)
             ? {
-                batchMonthStateId: activeMonthRecord.id,
-                monthNumber: activeMonthRecord.monthNumber,
+                batchId: classId,
+                batchName: className,
               }
             : {}),
-          createdAt: serverTimestamp(),
-        });
 
-        /*
-         * Save each student's attendance.
-         */
-        attendanceRefs.forEach(({ student, ref }) => {
-          transaction.set(ref, {
-            studentId: normalizeId(student.studentId || student.id),
-            studentName: student.name || student.studentName || "",
-            roll: getStudentRoll(student),
-            departmentId: normalizeId(departmentId),
-            departmentName:
-              selectedDepartment?.name || selectedDepartment?.englishName || "",
-            classId,
-            className: getClassName(selectedClass),
-            date: today,
-            present: attendance[student.id] !== false,
-            ...(departmentUsesDressCode
-              ? {
-                  dressCode: dressCode[student.id] !== false,
-                }
-              : {}),
-            teacherId,
-            teacherName,
-            createdAt: serverTimestamp(),
-          });
+          takenByUid: submitterUid,
+          takenByName: submitterName,
+          takenByEmail: submitterEmail,
+          takenByRole: submitterRole,
+
+          teacherId: submitterUid,
+          teacherName: submitterName,
+
+          createdAt: serverTimestamp(),
+          updatedAt: serverTimestamp(),
         });
       });
 
-      toast.success(
-        `উপস্থিতি সংরক্ষিত হয়েছে। উপস্থিত: ${presentCount}, অনুপস্থিত: ${absentCount}`,
+      await batch.commit();
+
+      toast.success("উপস্থিতি সফলভাবে সংরক্ষণ করা হয়েছে।");
+
+      /* -----------------------------------------------
+         Recalculate currentMark
+
+         Attendance is already saved. If recalculation
+         fails, do not treat attendance as unsaved.
+      ----------------------------------------------- */
+
+      const results = await Promise.allSettled(
+        students.map((student) =>
+          calculateCurrentMark({
+            db,
+            studentDocumentId: student.docId,
+            studentId: String(student.studentId ?? ""),
+          }),
+        ),
       );
-    } catch (err) {
-      console.error("Save attendance error:", err);
 
-      if (err.message === "BATCH_MONTH_NOT_ACTIVE") {
+      const failedResults = results.filter(
+        (result) => result.status === "rejected",
+      );
+
+      if (failedResults.length > 0) {
+        console.error("currentMark recalculation failures:", failedResults);
+
         toast.error(
-          "এই ব্যাচের মাস বন্ধ হয়েছে বা চালু নেই। উপস্থিতি জমা দেওয়া যাবে না।",
+          `${failedResults.length} জন শিক্ষার্থীর currentMark আপডেট হয়নি।`,
         );
-      } else if (
-        err.code === "attendance/already-exists" ||
-        err.message === "ATTENDANCE_ALREADY_EXISTS"
-      ) {
-        try {
-          const previousSession = await getDoc(sessionRef);
-
-          const previousTeacher = previousSession.exists()
-            ? previousSession.data().teacherName || "অন্য একজন শিক্ষক"
-            : "অন্য একজন শিক্ষক";
-
-          toast.error(`আজকের উপস্থিতি ${previousTeacher} ইতিমধ্যে নিয়েছেন।`);
-        } catch {
-          toast.error("আজকের উপস্থিতি ইতিমধ্যে জমা হয়েছে।");
-        }
       } else {
-        toast.error(
-          "উপস্থিতি সংরক্ষণ করা যায়নি। Console ও Firestore rules পরীক্ষা করুন।",
-        );
+        toast.success("সব শিক্ষার্থীর currentMark আপডেট হয়েছে।");
       }
+
+      await checkExistingAttendance();
+    } catch (error) {
+      console.error("Submit attendance error:", error);
+
+      toast.error(
+        error.message || "উপস্থিতি সংরক্ষণ করা যায়নি। আবার চেষ্টা করুন।",
+      );
     } finally {
       setSubmitting(false);
     }
   };
 
-  /* --------------------------------------------------
-     Loading and errors
-  -------------------------------------------------- */
+  /* =========================================================
+     Loading
+  ========================================================= */
 
-  if (pageLoading) {
+  if (loading) {
     return (
-      <div className="flex min-h-[50vh] items-center justify-center">
-        <span className="loading loading-spinner loading-lg text-primary" />
+      <div className="grid min-h-[60vh] place-items-center">
+        <div className="text-center">
+          <span className="loading loading-spinner loading-lg text-primary" />
+
+          <p className="mt-3 text-sm text-base-content/60">
+            অ্যাকাউন্ট যাচাই হচ্ছে...
+          </p>
+        </div>
       </div>
     );
   }
 
-  if (error && !profile) {
+  /* =========================================================
+     Access Denied
+  ========================================================= */
+
+  if (authError || !canManageAttendance) {
     return (
-      <main className="mx-auto max-w-xl p-6">
-        <div className="alert alert-error">
-          <span>{error}</span>
+      <div className="mx-auto mt-8 max-w-md px-4">
+        <div className="rounded-2xl border border-error/20 bg-base-100 p-6 text-center shadow-sm">
+          <FiShield className="mx-auto mb-3 text-4xl text-error" />
+
+          <h2 className="text-lg font-bold">প্রবেশের অনুমতি নেই</h2>
+
+          <p className="mt-2 text-sm text-base-content/65">
+            {authError || "এই পেজ ব্যবহারের জন্য অনুমোদিত অ্যাকাউন্ট প্রয়োজন।"}
+          </p>
         </div>
-      </main>
+      </div>
     );
   }
 
-  /* --------------------------------------------------
+  /* =========================================================
      UI
-  -------------------------------------------------- */
+  ========================================================= */
 
   return (
-    <main className="min-h-screen bg-base-200/40 px-4 py-6 text-base-content sm:px-6">
-      <div className="mx-auto max-w-5xl space-y-5">
-        <header className="flex flex-wrap items-center justify-between gap-3">
+    <main className="mx-auto w-full max-w-5xl px-3 py-4 sm:px-5 sm:py-6">
+      {/* Header */}
+      <section className="mb-5 rounded-2xl bg-gradient-to-br from-primary to-primary/80 p-4 text-primary-content shadow-md sm:p-6">
+        <div className="flex items-start justify-between gap-3">
           <div>
-            <h1 className="text-2xl font-extrabold sm:text-3xl">
-              Add Attendance
+            <p className="mb-2 flex items-center gap-2 text-xs opacity-80">
+              <FiCheckCircle />
+              TopLine Education
+            </p>
+
+            <h1 className="text-xl font-extrabold sm:text-2xl">
+              শিক্ষার্থীদের উপস্থিতি
             </h1>
 
-            <p className="mt-1 text-sm text-base-content/60">
-              {today} · {getTeacherName(profile, user)}
-              {isCR && <span className="ml-2 badge badge-info">CR</span>}
+            <p className="mt-1 text-sm opacity-80">
+              উপস্থিতি নিন, যাচাই করুন এবং সংরক্ষণ করুন।
             </p>
           </div>
 
-          <div className="badge badge-primary badge-lg gap-2">
-            <FaClipboardCheck />
-            উপস্থিতি
-          </div>
-        </header>
+          <FiUserCheck className="text-3xl" />
+        </div>
 
-        {error && (
-          <div className="alert alert-warning">
-            <span>{error}</span>
+        <div className="mt-4 flex flex-wrap gap-2 text-xs">
+          <span className="rounded-full bg-white/15 px-3 py-1.5">
+            {isAdminUser
+              ? "Admin"
+              : isCR
+                ? "Class Representative"
+                : isHead
+                  ? "Department Head"
+                  : "Teacher"}
+          </span>
+
+          <span className="max-w-full truncate rounded-full bg-white/15 px-3 py-1.5">
+            {profile?.name || currentUser?.displayName || currentUser?.email}
+          </span>
+        </div>
+      </section>
+
+      {/* Attendance Information */}
+      <section className="mb-4 rounded-2xl border border-base-300 bg-base-100 p-4 shadow-sm sm:p-5">
+        <h2 className="mb-4 flex items-center gap-2 font-bold">
+          <FiCalendar className="text-primary" />
+          উপস্থিতির তথ্য
+        </h2>
+
+        <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
+          <label className="form-control min-w-0">
+            <span className="label-text mb-1.5 text-sm font-medium">বিভাগ</span>
+
+            <select
+              className="select select-bordered w-full"
+              value={selectedDepartmentId}
+              disabled={isCR || submitting}
+              onChange={(event) => handleDepartmentChange(event.target.value)}
+            >
+              {allowedDepartments.map((item) => (
+                <option
+                  key={getDepartmentId(item)}
+                  value={getDepartmentId(item)}
+                >
+                  {item.name}
+                </option>
+              ))}
+            </select>
+          </label>
+
+          <label className="form-control min-w-0">
+            <span className="label-text mb-1.5 text-sm font-medium">
+              শ্রেণি / ব্যাচ
+            </span>
+
+            <select
+              className="select select-bordered w-full"
+              value={selectedClassId}
+              disabled={isCR || submitting}
+              onChange={(event) => handleClassChange(event.target.value)}
+            >
+              {availableClasses.map((item) => (
+                <option key={getClassId(item)} value={getClassId(item)}>
+                  {item.name}
+                </option>
+              ))}
+            </select>
+          </label>
+
+          <label className="form-control min-w-0">
+            <span className="label-text mb-1.5 text-sm font-medium">তারিখ</span>
+
+            <input
+              type="date"
+              className="input input-bordered w-full"
+              value={date}
+              max={getLocalDate()}
+              disabled={submitting}
+              onChange={(event) => setDate(event.target.value)}
+            />
+          </label>
+        </div>
+
+        {isCR && (
+          <div className="alert mt-3 border border-info/20 bg-info/10 py-2 text-sm">
+            <FiShield className="shrink-0 text-info" />
+
+            <span>
+              নিজের ব্যাচ: <strong>{crStudent?.batchName}</strong>
+            </span>
           </div>
         )}
+      </section>
 
-        <section className="rounded-2xl border border-base-300 bg-base-100 p-4 shadow-sm sm:p-6">
-          <div
-            className={`grid grid-cols-1 gap-4 ${
-              showDepartmentSelect ? "sm:grid-cols-2" : ""
-            }`}
+      {/* Attendance Status */}
+      {checkingAttendance && (
+        <div className="alert mb-4 border border-info/20 bg-info/10 text-sm">
+          <span className="loading loading-spinner loading-sm" />
+          আগের উপস্থিতি যাচাই হচ্ছে...
+        </div>
+      )}
+
+      {attendanceCheckError && (
+        <div className="alert mb-4 border border-error/30 bg-error/10 text-sm">
+          <FiAlertCircle className="shrink-0 text-error" />
+
+          <span>{attendanceCheckError}</span>
+
+          <button
+            type="button"
+            className="btn btn-sm btn-ghost"
+            onClick={checkExistingAttendance}
+            disabled={checkingAttendance}
           >
-            {showDepartmentSelect && (
-              <label className="form-control">
-                <span className="label-text mb-2 font-semibold">বিভাগ</span>
+            আবার চেষ্টা
+          </button>
+        </div>
+      )}
 
-                <select
-                  className="select select-bordered w-full"
-                  value={departmentId}
-                  onChange={(event) =>
-                    handleDepartmentChange(event.target.value)
-                  }
-                  disabled={submitting}
-                >
-                  <option value="">বিভাগ নির্বাচন করুন</option>
+      {!checkingAttendance && alreadyTaken && (
+        <div className="alert mb-4 border border-warning/30 bg-warning/10 text-sm">
+          <FiAlertCircle className="shrink-0 text-warning" />
 
-                  {visibleDepartments.map((department) => (
-                    <option
-                      key={department.id}
-                      value={getDepartmentKey(department)}
-                    >
-                      {department.name ||
-                        department.englishName ||
-                        department.id}
-                    </option>
-                  ))}
-                </select>
-              </label>
-            )}
+          <div>
+            <p className="font-bold">এই দিনের উপস্থিতি আগেই নেওয়া হয়েছে।</p>
 
-            <label className="form-control">
-              <span className="label-text mb-2 font-semibold">
-                শ্রেণি / ব্যাচ
-              </span>
+            <p className="mt-1 text-xs opacity-80">
+              গ্রহণকারী: {takenBy || getSubmitterName(existingAttendance[0])}
+            </p>
 
-              <select
-                className="select select-bordered w-full"
-                value={classId}
-                onChange={(event) => handleClassChange(event.target.value)}
-                disabled={!departmentId || submitting || isCR}
-              >
-                <option value="">শ্রেণি / ব্যাচ নির্বাচন করুন</option>
-
-                {availableClasses.map((item) => (
-                  <option key={item.id} value={item.id}>
-                    {getClassName(item)}
-                  </option>
-                ))}
-              </select>
-
-              {isCR && (
-                <span className="mt-2 text-xs text-base-content/60">
-                  আপনি শুধু নিজের ব্যাচের উপস্থিতি নিতে পারবেন।
-                </span>
-              )}
-            </label>
+            <p className="mt-1 text-xs opacity-80">
+              রেকর্ড: {existingAttendance.length} জন
+            </p>
           </div>
-        </section>
+        </div>
+      )}
 
-        {classId && (
-          <>
-            <section className="grid grid-cols-2 gap-3 sm:grid-cols-3">
-              <StatCard
-                label="শিক্ষার্থী"
-                value={students.length}
-                icon={FaUsers}
-                color="text-primary"
-              />
+      {/* Statistics */}
+      <section className="mb-4 grid grid-cols-3 gap-2 sm:gap-3">
+        {[
+          ["মোট শিক্ষার্থী", students.length, "text-base-content"],
+          ["উপস্থিত", presentCount, "text-success"],
+          ["অনুপস্থিত", absentCount, "text-error"],
+        ].map(([label, value, color]) => (
+          <div
+            key={label}
+            className="rounded-xl border border-base-300 bg-base-100 p-3 sm:p-4"
+          >
+            <p className="text-xs text-base-content/60">{label}</p>
 
-              <StatCard
-                label="উপস্থিত"
-                value={presentCount}
-                icon={FaCheck}
-                color="text-success"
-              />
+            <p className={`mt-1 text-xl font-extrabold sm:text-2xl ${color}`}>
+              {value}
+            </p>
+          </div>
+        ))}
+      </section>
 
-              <div className="col-span-2 sm:col-span-1">
-                <StatCard
-                  label="অনুপস্থিত"
-                  value={absentCount}
-                  icon={FaGraduationCap}
-                  color="text-error"
-                />
-              </div>
-            </section>
+      {/* Student List */}
+      <section className="overflow-hidden rounded-2xl border border-base-300 bg-base-100 shadow-sm">
+        <div className="border-b border-base-300 p-4 sm:p-5">
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <div>
+              <h2 className="flex items-center gap-2 font-bold">
+                <FiUsers className="text-primary" />
+                শিক্ষার্থীদের তালিকা
+              </h2>
 
-            <section className="overflow-hidden rounded-2xl border border-base-300 bg-base-100 shadow-sm">
-              <div className="flex flex-col gap-3 border-b border-base-300 p-4 sm:flex-row sm:items-center sm:justify-between">
-                <div>
-                  <h2 className="text-lg font-bold">
-                    {getClassName(
-                      availableClasses.find((item) => item.id === classId),
-                    )}
-                  </h2>
+              <p className="mt-1 text-xs text-base-content/60">
+                {selectedDepartment?.name || "বিভাগ নির্বাচন করুন"}
 
-                  <p className="text-sm text-base-content/60">
-                    Roll / ID অনুযায়ী সাজানো
-                  </p>
-                </div>
+                {selectedClass ? ` · ${selectedClass.name}` : ""}
+              </p>
+            </div>
 
-                <label className="input input-bordered flex items-center gap-2">
-                  <FaSearch className="text-base-content/40" />
+            <button
+              type="button"
+              className="btn btn-sm btn-ghost gap-2"
+              onClick={loadStudents}
+              disabled={loadingStudents || submitting}
+            >
+              <FiRefreshCw className={loadingStudents ? "animate-spin" : ""} />
+              রিফ্রেশ
+            </button>
+          </div>
 
-                  <input
-                    type="search"
-                    className="grow"
-                    placeholder="নাম বা ID খুঁজুন"
-                    value={search}
-                    onChange={(event) => setSearch(event.target.value)}
-                  />
-                </label>
-              </div>
+          <label className="input input-bordered mt-4 flex w-full items-center gap-2">
+            <FiSearch className="shrink-0 text-base-content/50" />
 
-              <div className="flex flex-wrap items-center justify-between gap-3 border-b border-base-300 px-4 py-3">
-                <label className="flex cursor-pointer items-center gap-2 text-sm font-medium">
-                  <input
-                    type="checkbox"
-                    className="checkbox checkbox-primary checkbox-sm"
-                    checked={students.length > 0 && absentCount === 0}
-                    onChange={(event) =>
-                      toggleAllAttendance(event.target.checked)
-                    }
-                    disabled={studentsLoading || submitting}
-                  />
-                  সবাই উপস্থিত
-                </label>
+            <input
+              type="search"
+              className="grow"
+              placeholder="নাম অথবা শিক্ষার্থী আইডি দিয়ে খুঁজুন"
+              value={search}
+              onChange={(event) => setSearch(event.target.value)}
+            />
+          </label>
 
-                {departmentUsesDressCode && (
-                  <div className="flex items-center gap-3">
-                    <span className="text-sm">Dress Code</span>
+          <div className="mt-3 flex flex-wrap gap-2">
+            <button
+              type="button"
+              className="btn btn-sm btn-outline btn-success"
+              onClick={() => markAll(true)}
+              disabled={
+                !students.length ||
+                alreadyTaken ||
+                checkingAttendance ||
+                Boolean(attendanceCheckError) ||
+                submitting
+              }
+            >
+              <FiCheck />
+              সবাই উপস্থিত
+            </button>
 
-                    <button
-                      type="button"
-                      className="btn btn-ghost btn-xs"
-                      onClick={() => {
-                        const allChecked = students.every(
-                          (student) => dressCode[student.id] !== false,
-                        );
+            <button
+              type="button"
+              className="btn btn-sm btn-outline btn-error"
+              onClick={() => markAll(false)}
+              disabled={
+                !students.length ||
+                alreadyTaken ||
+                checkingAttendance ||
+                Boolean(attendanceCheckError) ||
+                submitting
+              }
+            >
+              <FiX />
+              সবাই অনুপস্থিত
+            </button>
+          </div>
+        </div>
 
-                        toggleAllDressCode(!allChecked);
-                      }}
-                      disabled={studentsLoading || submitting}
-                    >
-                      সবাই পরিবর্তন
-                    </button>
-                  </div>
-                )}
-              </div>
+        {loadingStudents ? (
+          <div className="grid min-h-48 place-items-center">
+            <div className="text-center">
+              <span className="loading loading-spinner loading-md text-primary" />
 
-              {studentsLoading ? (
-                <div className="flex justify-center p-12">
-                  <span className="loading loading-spinner loading-lg text-primary" />
-                </div>
-              ) : filteredStudents.length === 0 ? (
-                <div className="p-10 text-center text-sm text-base-content/60">
-                  কোনো শিক্ষার্থী পাওয়া যায়নি।
-                  <p className="mt-2 text-xs">
-                    students collection-এ departmentId এবং সঠিক classId /
-                    batchId আছে কি না পরীক্ষা করুন।
-                  </p>
-                </div>
-              ) : (
-                <div className="overflow-x-auto">
-                  <table className="table">
-                    <thead>
-                      <tr>
-                        <th>Roll / ID</th>
-                        <th>শিক্ষার্থী</th>
-                        <th className="text-center">উপস্থিত</th>
+              <p className="mt-3 text-sm text-base-content/60">
+                শিক্ষার্থীদের তালিকা লোড হচ্ছে...
+              </p>
+            </div>
+          </div>
+        ) : !students.length ? (
+          <div className="px-4 py-12 text-center">
+            <FiUsers className="mx-auto mb-3 text-3xl text-base-content/30" />
 
-                        {departmentUsesDressCode && (
-                          <th className="text-center">Dress Code</th>
-                        )}
-                      </tr>
-                    </thead>
+            <p className="font-semibold">কোনো শিক্ষার্থী পাওয়া যায়নি।</p>
 
-                    <tbody>
-                      {filteredStudents.map((student) => (
-                        <tr key={student.id}>
-                          <td className="font-mono text-sm">
-                            {getStudentRoll(student) || student.id}
-                          </td>
+            <p className="mt-1 text-xs text-base-content/60">
+              বিভাগ, শ্রেণি/ব্যাচ এবং শিক্ষার্থীদের তথ্য যাচাই করুন।
+            </p>
+          </div>
+        ) : !filteredStudents.length ? (
+          <p className="px-4 py-10 text-center text-sm text-base-content/60">
+            অনুসন্ধানের সঙ্গে মেলে এমন শিক্ষার্থী নেই।
+          </p>
+        ) : (
+          <div className="divide-y divide-base-200">
+            {filteredStudents.map((student, index) => {
+              const present = attendance[student.docId] === true;
 
-                          <td>
-                            <div className="font-semibold">
-                              {student.name || student.studentName || "নাম নেই"}
-
-                              {student.isCR === true && (
-                                <span className="ml-2 badge badge-info badge-sm">
-                                  CR
-                                </span>
-                              )}
-                            </div>
-
-                            <div className="text-xs text-base-content/50">
-                              ID: {student.studentId || student.id}
-                            </div>
-                          </td>
-
-                          <td className="text-center">
-                            <input
-                              type="checkbox"
-                              className="checkbox checkbox-success"
-                              checked={attendance[student.id] !== false}
-                              onChange={(event) =>
-                                setAttendance((previous) => ({
-                                  ...previous,
-                                  [student.id]: event.target.checked,
-                                }))
-                              }
-                              disabled={submitting}
-                            />
-                          </td>
-
-                          {departmentUsesDressCode && (
-                            <td className="text-center">
-                              <input
-                                type="checkbox"
-                                className="checkbox checkbox-primary"
-                                checked={dressCode[student.id] !== false}
-                                onChange={(event) =>
-                                  setDressCode((previous) => ({
-                                    ...previous,
-                                    [student.id]: event.target.checked,
-                                  }))
-                                }
-                                disabled={submitting}
-                              />
-                            </td>
-                          )}
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
-              )}
-
-              <div className="flex flex-col gap-3 border-t border-base-300 p-4 sm:flex-row sm:items-center sm:justify-between">
-                <p className="text-sm text-base-content/60">
-                  {filteredStudents.length} / {students.length} শিক্ষার্থী
-                </p>
-
+              return (
                 <button
+                  key={student.docId}
                   type="button"
-                  className="btn btn-primary"
-                  onClick={handleSubmit}
+                  onClick={() => toggleStudent(student.docId)}
                   disabled={
-                    submitting ||
-                    studentsLoading ||
-                    students.length === 0 ||
-                    !classId
+                    alreadyTaken ||
+                    checkingAttendance ||
+                    Boolean(attendanceCheckError) ||
+                    submitting
                   }
+                  className={`flex w-full items-center gap-3 px-4 py-3 text-left transition-colors sm:px-5 ${
+                    present
+                      ? "hover:bg-success/5"
+                      : "bg-error/[0.03] hover:bg-error/5"
+                  } disabled:cursor-not-allowed disabled:opacity-75`}
                 >
-                  {submitting ? (
-                    <>
-                      <span className="loading loading-spinner loading-sm" />
-                      সংরক্ষণ হচ্ছে...
-                    </>
-                  ) : (
-                    <>
-                      <FaCalendarAlt />
-                      Add Attendance
-                    </>
-                  )}
+                  <span className="grid h-9 w-9 shrink-0 place-items-center rounded-full bg-base-200 text-xs font-bold">
+                    {index + 1}
+                  </span>
+
+                  <span className="min-w-0 flex-1">
+                    <span className="block truncate text-sm font-semibold">
+                      {student.name || "নাম নেই"}
+                    </span>
+
+                    <span className="mt-0.5 block truncate text-xs text-base-content/60">
+                      ID: {student.studentId || student.docId}
+                    </span>
+                  </span>
+
+                  <span
+                    className={`flex shrink-0 items-center gap-1.5 rounded-full px-3 py-2 text-xs font-bold ${
+                      present
+                        ? "bg-success/10 text-success"
+                        : "bg-error/10 text-error"
+                    }`}
+                  >
+                    {present ? <FiCheck /> : <FiX />}
+
+                    {present ? "উপস্থিত" : "অনুপস্থিত"}
+                  </span>
                 </button>
-              </div>
-            </section>
-          </>
+              );
+            })}
+          </div>
         )}
-      </div>
+
+        {/* Save Attendance */}
+        <div className="sticky bottom-0 z-10 border-t border-base-300 bg-base-100/95 p-4 backdrop-blur sm:p-5">
+          <div className="mb-3 flex items-center justify-between gap-3 text-sm">
+            <span className="text-base-content/65">
+              {presentCount} / {students.length} জন উপস্থিত
+            </span>
+
+            <span className="font-semibold">
+              {students.length
+                ? `${Math.round((presentCount / students.length) * 100)}%`
+                : "0%"}
+            </span>
+          </div>
+
+          <progress
+            className="progress progress-success mb-4 w-full"
+            value={presentCount}
+            max={students.length || 1}
+          />
+
+          <button
+            type="button"
+            className="btn btn-primary min-h-12 w-full gap-2"
+            onClick={handleSubmit}
+            disabled={
+              submitting ||
+              loadingStudents ||
+              checkingAttendance ||
+              Boolean(attendanceCheckError) ||
+              alreadyTaken ||
+              !students.length ||
+              !selectedDepartment ||
+              !selectedClass
+            }
+          >
+            {submitting ? (
+              <>
+                <span className="loading loading-spinner loading-sm" />
+                উপস্থিতি সংরক্ষণ ও নম্বর আপডেট হচ্ছে...
+              </>
+            ) : alreadyTaken ? (
+              <>
+                <FiCheckCircle />
+                উপস্থিতি ইতিমধ্যে সংরক্ষিত
+              </>
+            ) : (
+              <>
+                <FiSend />
+                উপস্থিতি সংরক্ষণ করুন
+              </>
+            )}
+          </button>
+
+          <p className="mt-2 text-center text-xs text-base-content/55">
+            গ্রহণকারী:{" "}
+            {profile?.name || currentUser?.displayName || currentUser?.email}
+          </p>
+        </div>
+      </section>
     </main>
   );
 }

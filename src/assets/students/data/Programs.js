@@ -9,27 +9,27 @@ export const programs = {
         external: true,
       },
       {
-        label: "অনলাইন পরীক্ষা",
-        description: "বহুনির্বাচনী পরীক্ষা",
-        href: "/portal/exams",
-        icon: "exam",
-      },
-      {
         label: "পরীক্ষার ফলাফল",
         description: "অনলাইন ও অফলাইন",
-        href: "/portal/results",
+        href: "/student-exam-result",
         icon: "chart",
       },
       {
-        label: "পরীক্ষাসমূহ",
+        label: "অনলাইন এক্সাম",
         description: "বহুনির্বাচনী পরীক্ষা",
-        href: "/portal/exam",
+        href: "/exam-list",
         icon: "calendar",
       },
       {
-        label: "লেসন প্ল্যান",
+        label: "পরীক্ষার সিলেবাস",
+        description: "অফলাইন এক্সাম",
+        href: "/view-syllabus",
+        icon: "calendar",
+      },
+      {
+        label: "ক্লাস ডায়েরি",
         description: "চলমান পড়া",
-        href: "/portal/lesson-plan",
+        href: "/class-diary",
         icon: "check",
       },
       {

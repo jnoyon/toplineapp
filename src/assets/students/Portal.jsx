@@ -1,39 +1,67 @@
-import { useEffect, useState } from "react";
-import { useNavigate } from "react-router";
-import { doc, getDoc } from "firebase/firestore";
+import { useCallback, useEffect, useState } from "react";
+import { Link, useNavigate } from "react-router";
+import { doc, onSnapshot } from "firebase/firestore";
 import toast from "react-hot-toast";
+
 import {
   FiBookOpen,
   FiFileText,
   FiBarChart2,
-  FiCalendar,
   FiClipboard,
   FiUser,
-  FiCheckCircle,
   FiEdit2,
   FiChevronRight,
-  FiSun,
-  FiMoon,
+  FiAlertCircle,
+  FiLock,
+  FiRefreshCw,
+  FiClock,
+  FiHash,
+  FiArrowUpRight,
 } from "react-icons/fi";
 
 import { db } from "../firebase/firebase.init";
-import MonthlyProgress from "./MonthlyProgress";
 import { programs } from "./data/Programs";
+import LoadingScreen from "../components/LoadingScreen";
+
+const SESSION_KEY = "studentSession";
+const THEME_KEY = "topline-theme";
 
 const icons = {
   book: FiBookOpen,
   exam: FiFileText,
   chart: FiBarChart2,
-  calendar: FiCalendar,
   task: FiClipboard,
   user: FiUser,
-  check: FiCheckCircle,
 };
 
-function Icon({ name, size = 22, className = "" }) {
+function Icon({ name, size = 20, className = "" }) {
   const Component = icons[name] || FiBookOpen;
-
   return <Component size={size} className={className} aria-hidden="true" />;
+}
+
+/* Helpers */
+
+function getStudentSession() {
+  try {
+    const raw = localStorage.getItem(SESSION_KEY);
+    if (!raw) return null;
+
+    const session = JSON.parse(raw);
+
+    if (
+      session?.role !== "student" ||
+      !session?.documentId ||
+      session.studentId == null
+    ) {
+      localStorage.removeItem(SESSION_KEY);
+      return null;
+    }
+
+    return session;
+  } catch {
+    localStorage.removeItem(SESSION_KEY);
+    return null;
+  }
 }
 
 function getProgram(student) {
@@ -49,7 +77,7 @@ function getProgram(student) {
   if (department.includes("academy")) return "academy";
   if (department.includes("coaching")) return "coaching";
 
-  const departmentId = String(student?.departmentId ?? "");
+  const departmentId = String(student?.departmentId ?? "").replace(/^0+/, "");
 
   if (departmentId === "3") return "care";
   if (departmentId === "1") return "academy";
@@ -92,82 +120,236 @@ function getCurrentMark(student) {
 }
 
 function getClassName(student) {
-  return student?.className ?? student?.classNumber ?? student?.class ?? "—";
+  return (
+    student?.className ??
+    student?.classNumber ??
+    student?.class ??
+    student?.batchName ??
+    student?.batch ??
+    "—"
+  );
 }
+
+function isStudentActive(student) {
+  const status =
+    student?.isActive ?? student?.active ?? student?.enabled ?? true;
+
+  if (status === false || status === 0) return false;
+
+  if (typeof status === "string") {
+    return ![
+      "false",
+      "0",
+      "inactive",
+      "disabled",
+      "blocked",
+      "suspended",
+    ].includes(status.trim().toLowerCase());
+  }
+
+  return true;
+}
+
+/* Status screen */
+
+function StatusScreen({ type = "pending", student, onLogin }) {
+  const pending = type === "pending";
+
+  return (
+    <main className="relative flex min-h-[75vh] items-center justify-center overflow-hidden bg-[#F5F7FA] px-4 py-8 transition-colors dark:bg-slate-950">
+      <div
+        className={`pointer-events-none absolute -left-20 -top-20 h-64 w-64 rounded-full blur-3xl ${
+          pending ? "bg-amber-400/10" : "bg-red-400/10"
+        }`}
+      />
+
+      <div
+        className={`relative w-full max-w-md overflow-hidden rounded-3xl border border-slate-200 bg-white shadow-xl dark:border-slate-800 dark:bg-slate-900 ${
+          pending ? "" : ""
+        }`}
+      >
+        <div
+          className={`h-1.5 ${
+            pending
+              ? "bg-gradient-to-r from-amber-400 via-[#E74C3C] to-amber-400"
+              : "bg-gradient-to-r from-red-500 via-orange-400 to-red-500"
+          }`}
+        />
+
+        <div className="p-6 text-center sm:p-8">
+          <div
+            className={`mx-auto flex h-16 w-16 items-center justify-center rounded-2xl ${
+              pending
+                ? "bg-amber-50 text-amber-500 dark:bg-amber-950/40 dark:text-amber-400"
+                : "bg-red-50 text-red-500 dark:bg-red-950/40 dark:text-red-400"
+            }`}
+          >
+            {pending ? <FiClock size={30} /> : <FiLock size={30} />}
+          </div>
+
+          <span
+            className={`mt-5 inline-flex items-center gap-2 rounded-full px-3 py-1.5 text-xs font-bold ${
+              pending
+                ? "bg-amber-50 text-amber-700 dark:bg-amber-950/40 dark:text-amber-400"
+                : "bg-red-50 text-red-700 dark:bg-red-950/40 dark:text-red-400"
+            }`}
+          >
+            <span
+              className={`h-1.5 w-1.5 rounded-full ${
+                pending ? "animate-pulse bg-amber-500" : "bg-red-500"
+              }`}
+            />
+            {pending ? "অনুমোদনের অপেক্ষায়" : "অ্যাকাউন্ট নিষ্ক্রিয়"}
+          </span>
+
+          <h1 className="mt-4 text-2xl font-black tracking-tight text-[#2C3E50] dark:text-white">
+            {pending ? "নিবন্ধন সফল হয়েছে!" : "আপনার অ্যাকাউন্টটি সক্রিয় নয়"}
+          </h1>
+
+          <p className="mx-auto mt-3 max-w-sm text-sm leading-6 text-slate-500 dark:text-slate-400">
+            {pending
+              ? `${getStudentName(student)}, আপনার অ্যাকাউন্টটি টপলাইন-এর পক্ষ থেকে অনুমোদনের অপেক্ষায় রয়েছে।`
+              : "আপনার শিক্ষার্থী অ্যাকাউন্টটি বর্তমানে নিষ্ক্রিয় রয়েছে।"}
+          </p>
+
+          {student && (
+            <div className="mt-5 flex items-center gap-3 rounded-2xl border border-slate-200 bg-slate-50 p-3 text-left dark:border-slate-800 dark:bg-slate-800/50">
+              <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-white text-[#2C3E50] shadow-sm dark:bg-slate-900 dark:text-white">
+                <FiUser size={19} />
+              </div>
+
+              <div className="min-w-0">
+                <p className="text-[11px] text-slate-500 dark:text-slate-400">
+                  Student ID
+                </p>
+                <p className="break-all text-sm font-bold text-[#2C3E50] dark:text-white">
+                  {student.studentId ?? "—"}
+                </p>
+              </div>
+            </div>
+          )}
+
+          {!pending && (
+            <button
+              type="button"
+              onClick={onLogin}
+              className="mt-5 inline-flex w-full items-center justify-center gap-2 rounded-xl bg-[#2C3E50] px-4 py-3 text-sm font-bold text-white transition hover:bg-[#243442]"
+            >
+              <FiRefreshCw size={16} />
+              লগইন পেজে ফিরে যান
+            </button>
+          )}
+
+          {pending && (
+            <p className="mt-5 text-xs text-slate-400 dark:text-slate-500">
+              অনুমোদন হলে আপনার অ্যাকাউন্ট স্বয়ংক্রিয়ভাবে আপডেট হবে।
+            </p>
+          )}
+        </div>
+      </div>
+    </main>
+  );
+}
+
+/* Error screen */
+
+function ErrorScreen({ onRetry }) {
+  return (
+    <main className="flex min-h-[65vh] items-center justify-center bg-[#F5F7FA] px-4 transition-colors dark:bg-slate-950">
+      <div className="w-full max-w-sm rounded-3xl border border-slate-200 bg-white p-7 text-center shadow-lg dark:border-slate-800 dark:bg-slate-900">
+        <div className="mx-auto flex h-14 w-14 items-center justify-center rounded-2xl bg-orange-50 text-orange-500 dark:bg-orange-950/30">
+          <FiAlertCircle size={27} />
+        </div>
+
+        <h2 className="mt-4 text-xl font-black text-[#2C3E50] dark:text-white">
+          তথ্য লোড করা যায়নি
+        </h2>
+
+        <p className="mt-2 text-sm leading-6 text-slate-500 dark:text-slate-400">
+          সাময়িক সমস্যা হয়েছে। আবার চেষ্টা করুন।
+        </p>
+
+        <button
+          type="button"
+          onClick={onRetry}
+          className="mt-5 inline-flex items-center gap-2 rounded-xl bg-[#2C3E50] px-5 py-3 text-sm font-bold text-white transition hover:bg-[#243442]"
+        >
+          <FiRefreshCw size={16} />
+          আবার চেষ্টা করুন
+        </button>
+      </div>
+    </main>
+  );
+}
+
+/* Main Portal */
 
 export default function Portal() {
   const navigate = useNavigate();
 
   const [student, setStudent] = useState(null);
   const [loading, setLoading] = useState(true);
+  const [inactive, setInactive] = useState(false);
+  const [approvalPending, setApprovalPending] = useState(false);
+  const [loadError, setLoadError] = useState(false);
+  const [retryKey, setRetryKey] = useState(0);
 
-  const [theme, setTheme] = useState(
-    () => localStorage.getItem("topline-theme") || "light",
-  );
+  /* Theme synchronization */
 
-  const darkMode = theme === "dark";
-
-  // Keep theme consistent with the Header
   useEffect(() => {
-    const applyTheme = (nextTheme) => {
-      setTheme(nextTheme === "dark" ? "dark" : "light");
+    const applyTheme = (value) => {
+      const theme = value === "dark" ? "dark" : "light";
+      const root = document.documentElement;
+
+      root.classList.toggle("dark", theme === "dark");
+      root.setAttribute("data-theme", theme);
+      root.style.colorScheme = theme;
     };
 
-    const handleThemeChange = (event) => {
-      applyTheme(event.detail);
+    applyTheme(localStorage.getItem(THEME_KEY) || "light");
+
+    const handleThemeChange = (event) => applyTheme(event.detail);
+    const handleStorageChange = (event) => {
+      if (event.key === THEME_KEY) {
+        applyTheme(event.newValue || "light");
+      }
     };
 
     window.addEventListener("topline-theme-change", handleThemeChange);
+    window.addEventListener("storage", handleStorageChange);
 
     return () => {
       window.removeEventListener("topline-theme-change", handleThemeChange);
+      window.removeEventListener("storage", handleStorageChange);
     };
   }, []);
 
+  /* Realtime student listener */
+
   useEffect(() => {
-    document.documentElement.setAttribute("data-theme", theme);
-    document.documentElement.classList.toggle("dark", darkMode);
+    const session = getStudentSession();
 
-    localStorage.setItem("topline-theme", theme);
+    if (!session) {
+      setLoading(false);
+      navigate("/login", { replace: true });
+      return undefined;
+    }
 
-    window.dispatchEvent(
-      new CustomEvent("topline-theme-change", {
-        detail: theme,
-      }),
-    );
-  }, [theme, darkMode]);
+    setLoading(true);
+    setLoadError(false);
+    setInactive(false);
+    setApprovalPending(false);
 
-  function toggleTheme() {
-    setTheme((current) => (current === "light" ? "dark" : "light"));
-  }
+    const studentRef = doc(db, "students", session.documentId);
 
-  // Load the logged-in student
-  useEffect(() => {
-    let cancelled = false;
-
-    async function loadStudent() {
-      try {
-        const savedSession = sessionStorage.getItem("studentSession");
-
-        if (!savedSession) {
-          navigate("/login", { replace: true });
-          return;
-        }
-
-        const session = JSON.parse(savedSession);
-
-        if (!session?.documentId || session.role !== "student") {
-          sessionStorage.removeItem("studentSession");
-          navigate("/login", { replace: true });
-          return;
-        }
-
-        const studentRef = doc(db, "students", session.documentId);
-        const snapshot = await getDoc(studentRef);
-
+    const unsubscribe = onSnapshot(
+      studentRef,
+      (snapshot) => {
         if (!snapshot.exists()) {
-          sessionStorage.removeItem("studentSession");
-          toast.error("শিক্ষার্থীর তথ্য পাওয়া যায়নি। আবার লগইন করুন।");
+          localStorage.removeItem(SESSION_KEY);
+          setStudent(null);
+          setLoading(false);
+          toast.error("শিক্ষার্থীর তথ্য পাওয়া যায়নি।");
           navigate("/login", { replace: true });
           return;
         }
@@ -177,75 +359,103 @@ export default function Portal() {
           documentId: snapshot.id,
         };
 
-        if (
-          String(studentData.studentId ?? "") !==
-          String(session.studentId ?? "")
-        ) {
-          sessionStorage.removeItem("studentSession");
+        if (String(studentData.studentId ?? "") !== String(session.studentId)) {
+          localStorage.removeItem(SESSION_KEY);
+          setStudent(null);
+          setLoading(false);
           toast.error("সেশন যাচাই করা যায়নি। আবার লগইন করুন।");
           navigate("/login", { replace: true });
           return;
         }
 
-        if (!cancelled) {
-          setStudent(studentData);
-        }
-      } catch (error) {
-        console.error("Portal loading error:", error);
-
-        if (!cancelled) {
-          toast.error("শিক্ষার্থীর তথ্য লোড করা যায়নি।");
-        }
-      } finally {
-        if (!cancelled) {
+        if (!isStudentActive(studentData)) {
+          localStorage.removeItem(SESSION_KEY);
+          setStudent(null);
+          setInactive(true);
+          setApprovalPending(false);
+          setLoadError(false);
           setLoading(false);
+          return;
         }
-      }
-    }
 
-    loadStudent();
+        if (studentData.approved !== true) {
+          setStudent(studentData);
+          setApprovalPending(true);
+          setInactive(false);
+          setLoadError(false);
+          setLoading(false);
+          return;
+        }
 
-    return () => {
-      cancelled = true;
-    };
-  }, [navigate]);
+        localStorage.setItem(
+          SESSION_KEY,
+          JSON.stringify({
+            ...session,
+            documentId: snapshot.id,
+            studentId: String(studentData.studentId),
+            name: getStudentName(studentData),
+            departmentId: studentData.departmentId ?? null,
+            departmentName: studentData.departmentName ?? "",
+            classId: studentData.classId ?? "",
+            className: studentData.className ?? "",
+            batchId: studentData.batchId ?? "",
+            batchName: studentData.batchName ?? "",
+            isCR: studentData.isCR === true,
+            role: "student",
+          }),
+        );
 
-  if (loading) {
+        setStudent(studentData);
+        setApprovalPending(false);
+        setInactive(false);
+        setLoadError(false);
+        setLoading(false);
+      },
+      (error) => {
+        console.error("Portal listener error:", error);
+        setLoadError(true);
+        setLoading(false);
+        toast.error(
+          "তথ্য লোড করা যায়নি। ইন্টারনেট ও Firestore permission পরীক্ষা করুন।",
+        );
+      },
+    );
+
+    return unsubscribe;
+  }, [navigate, retryKey]);
+
+  const retryLoading = useCallback(() => {
+    setLoadError(false);
+    setRetryKey((key) => key + 1);
+  }, []);
+
+  /* State screens */
+
+  if (loading) return <LoadingScreen />;
+
+  if (inactive) {
     return (
-      <main className="flex min-h-[70vh] items-center justify-center bg-slate-50 dark:bg-slate-950">
-        <div className="text-center">
-          <span className="loading loading-spinner loading-lg text-[#E74C3C]" />
-          <p className="mt-4 text-sm text-slate-500 dark:text-slate-400">
-            পোর্টাল প্রস্তুত হচ্ছে...
-          </p>
-        </div>
-      </main>
+      <StatusScreen
+        type="inactive"
+        onLogin={() => navigate("/login", { replace: true })}
+      />
     );
   }
 
-  if (!student) {
-    return (
-      <main className="flex min-h-[60vh] items-center justify-center bg-slate-50 px-4 dark:bg-slate-950">
-        <div className="text-center">
-          <h2 className="text-xl font-bold text-[#2C3E50] dark:text-white">
-            শিক্ষার্থীর তথ্য পাওয়া যায়নি
-          </h2>
-
-          <button
-            type="button"
-            onClick={() => navigate("/login", { replace: true })}
-            className="mt-4 rounded-xl bg-[#2C3E50] px-5 py-3 font-semibold text-white transition hover:bg-[#243442]"
-          >
-            লগইন করুন
-          </button>
-        </div>
-      </main>
-    );
+  if (loadError) {
+    return <ErrorScreen onRetry={retryLoading} />;
   }
+
+  if (approvalPending && student) {
+    return <StatusScreen type="pending" student={student} />;
+  }
+
+  if (!student) return <LoadingScreen />;
+
+  /* Student data */
 
   const programKey = getProgram(student);
   const program = programKey ? programs[programKey] : null;
-
   const studentName = getStudentName(student);
   const studentPhoto = getStudentPhoto(student);
   const currentMark = getCurrentMark(student);
@@ -258,8 +468,8 @@ export default function Portal() {
   const quickLinks = program?.links ?? [
     {
       label: "ফলাফল",
-      description: "পরীক্ষার ফলাফল",
-      href: "/portal/results",
+      description: "পরীক্ষার ফলাফল দেখুন",
+      href: "/student-exam-result",
       icon: "chart",
     },
     {
@@ -271,6 +481,8 @@ export default function Portal() {
   ];
 
   function handleNavigation(item) {
+    if (!item?.href) return;
+
     if (item.external) {
       window.open(item.href, "_blank", "noopener,noreferrer");
       return;
@@ -280,149 +492,163 @@ export default function Portal() {
   }
 
   return (
-    <main className="min-h-screen overflow-hidden bg-[#F5F7FA] text-slate-800 transition-colors duration-300 dark:bg-slate-950 dark:text-slate-100">
-      <div className="mx-auto max-w-6xl px-4 py-5 sm:px-6 sm:py-8">
-        {/* Student Profile */}
-        <section className="relative isolate overflow-hidden rounded-[28px] bg-gradient-to-br from-[#2C3E50] via-[#34495E] to-[#243342] p-5 text-white shadow-xl shadow-[#2C3E50]/10 sm:p-8">
-          <div className="pointer-events-none absolute -right-16 -top-24 -z-10 h-64 w-64 rounded-full border-[40px] border-white/[0.06]" />
+    <main className="min-h-screen bg-[#F5F7FA] text-slate-800 transition-colors duration-300 dark:bg-slate-950 dark:text-slate-100">
+      <div className="mx-auto max-w-6xl px-3 py-4 sm:px-5 sm:py-6 lg:px-6">
+        {/* Student profile */}
 
-          <div className="pointer-events-none absolute right-20 top-8 -z-10 hidden text-white/[0.10] sm:block">
-            <FiBookOpen size={90} />
+        <section className="group relative isolate overflow-hidden rounded-[24px] border border-slate-200/80 bg-gradient-to-br from-white via-[#FBFCFE] to-[#F0F4F8] text-[#2C3E50] shadow-lg shadow-slate-900/[0.04] transition-colors duration-300 dark:border-slate-800 dark:from-slate-900 dark:via-slate-900 dark:to-slate-800 dark:text-white dark:shadow-black/20">
+          <div className="pointer-events-none absolute -right-12 -top-20 -z-10 h-60 w-60 rounded-full border-[34px] border-[#2C3E50]/[0.035] transition-transform duration-700 group-hover:scale-110 dark:border-white/[0.04]" />
+
+          <div className="pointer-events-none absolute -bottom-24 left-1/3 -z-10 h-48 w-48 rounded-full bg-[#E74C3C]/[0.07] blur-3xl dark:bg-[#E74C3C]/[0.15]" />
+
+          <div className="pointer-events-none absolute right-5 top-5 -z-10 hidden text-[#2C3E50]/[0.045] dark:text-white/[0.045] sm:block">
+            <FiBookOpen size={105} />
           </div>
 
-          <div className="relative mb-5 flex flex-col gap-6 sm:flex-row sm:items-center">
-            <div className="flex min-w-0 items-center gap-4">
+          <div className="relative p-4 sm:p-6">
+            <div className="flex items-start gap-3.5 sm:gap-5">
               <div className="relative shrink-0">
-                {studentPhoto ? (
-                  <img
-                    src={studentPhoto}
-                    alt={studentName}
-                    className="h-20 w-20 rounded-2xl border-2 border-white/30 object-cover shadow-lg sm:h-24 sm:w-24"
-                  />
-                ) : (
-                  <div className="flex h-20 w-20 items-center justify-center rounded-2xl border-2 border-white/20 bg-white/10 sm:h-24 sm:w-24">
-                    <FiUser size={42} />
-                  </div>
-                )}
+                <div className="rounded-[20px] bg-gradient-to-br from-white via-slate-200 to-[#E74C3C] p-[2px] shadow-lg shadow-slate-900/10 dark:from-slate-500 dark:via-slate-700 dark:to-[#E74C3C]">
+                  {studentPhoto ? (
+                    <img
+                      src={studentPhoto}
+                      alt={studentName}
+                      loading="eager"
+                      referrerPolicy="no-referrer"
+                      onError={(event) => {
+                        event.currentTarget.style.display = "none";
+                      }}
+                      className="h-[88px] w-[88px] rounded-[18px] bg-slate-100 object-cover dark:bg-slate-800 sm:h-[112px] sm:w-[112px]"
+                    />
+                  ) : (
+                    <div className="flex h-[88px] w-[88px] items-center justify-center rounded-[18px] bg-slate-100 text-[#2C3E50] dark:bg-slate-800 dark:text-white sm:h-[112px] sm:w-[112px]">
+                      <FiUser size={43} />
+                    </div>
+                  )}
+                </div>
 
-                <span className="absolute -bottom-2 -right-2 flex h-7 w-7 items-center justify-center rounded-full border-2 border-[#2C3E50] bg-[#E74C3C] text-white">
-                  <FiCheckCircle size={14} />
-                </span>
+                {student.isCR === true && (
+                  <span className="absolute -bottom-2 -right-2 flex h-7 w-7 items-center justify-center rounded-full border-[3px] border-white bg-emerald-500 text-[9px] font-black text-white shadow-md dark:border-slate-900">
+                    CR
+                  </span>
+                )}
               </div>
 
-              <div className="min-w-0">
-                <h1 className="break-words text-2xl font-black leading-tight sm:text-3xl">
+              <div className="min-w-0 flex-1 pt-0.5">
+                <h1 className="break-words text-xl font-black leading-tight tracking-tight text-[#243442] dark:text-white sm:text-2xl">
                   {studentName}
                 </h1>
 
-                <p className="mt-2 text-sm text-white/75">
-                  স্টুডেন্ট আইডি: {student.studentId ?? "—"}
-                </p>
-
-                <p className="mt-1 text-sm text-white/75">
-                  {className}
-                  {student.roll || student.rollNumber
-                    ? ` · রোল ${student.roll ?? student.rollNumber}`
-                    : ""}
-                </p>
-
-                <p className="mt-1 text-sm text-white/75">
-                  প্রাপ্ত নম্বর:{" "}
-                  <span className="font-bold text-white">
-                    {currentMark ?? "—"}
+                <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1.5 text-xs text-slate-600 dark:text-slate-300">
+                  <span className="inline-flex items-center gap-1.5">
+                    <FiHash size={13} className="text-[#E74C3C]" />
+                    {student.studentId ?? "আইডি নেই"}
                   </span>
-                </p>
+
+                  <span className="inline-flex items-center gap-1.5">
+                    <FiBookOpen size={13} className="text-[#E74C3C]" />
+                    {className}
+                    <span className="text-slate-400 dark:text-slate-500">
+                      ·
+                    </span>
+                    <span>প্রাপ্ত নম্বর {currentMark ?? "—"}</span>
+                  </span>
+
+                  {(student.roll || student.rollNumber) && (
+                    <span className="inline-flex items-center gap-1.5">
+                      <FiClipboard size={13} className="text-[#E74C3C]" />
+                      রোল {student.roll ?? student.rollNumber}
+                    </span>
+                  )}
+                </div>
+
+                <div className="mt-3 flex flex-wrap items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={() => navigate(`/student/${studentRouteId}`)}
+                    className="inline-flex items-center gap-1.5 rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs font-bold text-[#2C3E50] shadow-sm transition hover:border-slate-300 hover:bg-slate-50 active:scale-[0.98] dark:border-slate-700 dark:bg-slate-800 dark:text-white dark:hover:bg-slate-700"
+                  >
+                    <FiUser size={14} />
+                    প্রোফাইল
+                    <FiArrowUpRight size={13} />
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => navigate(`/edit-student/${studentRouteId}`)}
+                    className="inline-flex items-center gap-1.5 rounded-xl bg-[#E74C3C] px-3 py-2 text-xs font-bold text-white shadow-sm shadow-red-900/10 transition hover:bg-[#d94335] active:scale-[0.98]"
+                  >
+                    <FiEdit2 size={13} />
+                    এডিট
+                  </button>
+                </div>
               </div>
             </div>
-
-            <div className="flex flex-wrap items-center gap-2 sm:ml-auto sm:flex-col sm:items-end">
-              {/* Light / Dark Mode */}
-              <button
-                type="button"
-                onClick={toggleTheme}
-                aria-label={
-                  darkMode ? "লাইট মোড চালু করুন" : "ডার্ক মোড চালু করুন"
-                }
-                title={darkMode ? "লাইট মোড" : "ডার্ক মোড"}
-                className="inline-flex items-center gap-2 rounded-xl border border-white/20 bg-white/10 px-3 py-2.5 text-sm font-semibold text-white backdrop-blur transition hover:bg-white/20"
-              >
-                {darkMode ? <FiSun size={17} /> : <FiMoon size={17} />}
-                {darkMode ? "লাইট মোড" : "ডার্ক মোড"}
-              </button>
-
-              <button
-                type="button"
-                onClick={() => navigate(`/student/${studentRouteId}`)}
-                className="inline-flex items-center gap-2 rounded-xl border border-white/20 bg-white/10 px-4 py-2.5 text-sm font-semibold text-white backdrop-blur transition hover:bg-white/20"
-              >
-                <FiUser size={17} />
-                বিস্তারিত
-              </button>
-
-              <button
-                type="button"
-                onClick={() => navigate(`/edit-student/${studentRouteId}`)}
-                className="inline-flex items-center gap-2 rounded-xl bg-[#E74C3C] px-4 py-2.5 text-sm font-bold text-white shadow-lg transition hover:-translate-y-0.5 hover:bg-[#D94335]"
-              >
-                <FiEdit2 size={17} />
-                এডিট করুন
-              </button>
-            </div>
           </div>
-
-          {/* TopLine Care: compact progress bar */}
-          {programKey === "care" && (
-            <MonthlyProgress student={student} compact />
-          )}
         </section>
 
-        {/* Program Menus */}
-        <section className="mt-8">
-          <div className="mb-5">
-            <h2 className="text-xl font-black text-[#2C3E50] dark:text-white">
-              আপনার পড়াশোনা
-            </h2>
-            <p className="mt-1 text-sm text-slate-500 dark:text-slate-400">
-              প্রয়োজনীয় বিষয়গুলো এখান থেকে খুলুন।
-            </p>
-          </div>
+        {/* Study menu */}
 
-          <div className="grid grid-cols-2 gap-3 sm:gap-4 lg:grid-cols-4">
+        <section className="mt-6">
+          {student.isCR === true && (
+            <div className="mb-5 flex items-center gap-3">
+              <Link to="/add-attendance" className="btn btn-accent">
+                উপস্থিতি যুক্ত করুন
+              </Link>
+            </div>
+          )}
+
+          <div className="grid grid-cols-2 gap-2.5 sm:grid-cols-3 sm:gap-3 lg:grid-cols-4">
             {quickLinks.map((item, index) => (
               <button
                 key={`${item.href}-${item.label}`}
                 type="button"
                 onClick={() => handleNavigation(item)}
-                style={{ animationDelay: `${index * 60}ms` }}
-                className="group relative flex min-h-40 flex-col items-start overflow-hidden rounded-2xl border border-slate-200/80 bg-white p-4 text-left shadow-sm transition-all duration-300 hover:-translate-y-1 hover:border-[#E74C3C]/40 hover:shadow-xl hover:shadow-[#2C3E50]/5 dark:border-slate-800 dark:bg-slate-900 sm:p-5"
+                style={{ animationDelay: `${index * 45}ms` }}
+                className="group/card relative flex min-h-[122px] animate-[fadeInUp_.35s_ease-out_both] flex-col overflow-hidden rounded-2xl border border-slate-200/80 bg-white p-3.5 text-left shadow-sm transition-all duration-200 hover:-translate-y-0.5 hover:border-[#E74C3C]/40 hover:shadow-md active:scale-[0.99] dark:border-slate-800 dark:bg-slate-900 dark:hover:border-[#E74C3C]/50 sm:min-h-[135px] sm:p-4"
               >
-                <div className="absolute -right-8 -top-8 h-24 w-24 rounded-full bg-[#E74C3C]/[0.04] transition-transform duration-500 group-hover:scale-150" />
+                <div className="pointer-events-none absolute -right-5 -top-5 h-16 w-16 rounded-full bg-[#E74C3C]/[0.045] transition-transform duration-300 group-hover/card:scale-150 dark:bg-[#E74C3C]/[0.08]" />
 
-                <div className="relative mb-5 flex h-12 w-12 items-center justify-center rounded-2xl bg-slate-100 text-[#2C3E50] transition-all duration-300 group-hover:bg-[#E74C3C] group-hover:text-white group-hover:shadow-lg group-hover:shadow-[#E74C3C]/20 dark:bg-slate-800 dark:text-slate-100">
-                  <Icon name={item.icon} size={24} />
-                </div>
-
-                <div className="relative mt-auto flex w-full items-end justify-between gap-2">
-                  <div className="min-w-0">
-                    <h3 className="text-sm font-bold text-[#2C3E50] dark:text-white sm:text-base">
-                      {item.label}
-                    </h3>
-
-                    <p className="mt-1 text-xs leading-5 text-slate-500 dark:text-slate-400">
-                      {item.description}
-                    </p>
+                <div className="relative flex w-full items-start justify-between gap-2">
+                  <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-slate-100 text-[#2C3E50] transition-colors duration-200 group-hover/card:bg-[#E74C3C] group-hover/card:text-white dark:bg-slate-800 dark:text-slate-100 dark:group-hover/card:bg-[#E74C3C]">
+                    <Icon name={item.icon} size={20} />
                   </div>
 
                   <FiChevronRight
-                    size={18}
-                    className="shrink-0 text-slate-300 transition-all duration-300 group-hover:translate-x-1 group-hover:text-[#E74C3C]"
+                    size={16}
+                    className="mt-1 text-slate-300 transition-all duration-200 group-hover/card:translate-x-0.5 group-hover/card:text-[#E74C3C] dark:text-slate-600"
                   />
+                </div>
+
+                <div className="relative mt-auto pt-4">
+                  <h3 className="text-sm font-extrabold text-[#2C3E50] dark:text-white">
+                    {item.label}
+                  </h3>
+                  <p className="mt-1 line-clamp-2 text-[11px] leading-4 text-slate-500 dark:text-slate-400">
+                    {item.description}
+                  </p>
                 </div>
               </button>
             ))}
           </div>
         </section>
       </div>
+
+      <style>{`
+        @keyframes fadeInUp {
+          from { opacity: 0; transform: translateY(10px); }
+          to { opacity: 1; transform: translateY(0); }
+        }
+
+        @media (prefers-reduced-motion: reduce) {
+          *, *::before, *::after {
+            animation-duration: 0.01ms !important;
+            animation-iteration-count: 1 !important;
+            scroll-behavior: auto !important;
+            transition-duration: 0.01ms !important;
+          }
+        }
+      `}</style>
     </main>
   );
 }
