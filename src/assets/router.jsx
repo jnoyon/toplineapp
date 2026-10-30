@@ -38,6 +38,15 @@ import ViewSyllabus from "./students/ViewSyllabus";
 import AddExamMark from "../dashboard/AddExamMark";
 import ManageExamMark from "../dashboard/ManageExamMark";
 import StudentExamResults from "./students/StudentExamResults";
+import TodaysVocabulary from "./students/TodaysVocabulary";
+import MonthlyReport from "../print/MonthlyReport";
+import TodaysVerb from "./students/TodaysVerb";
+import TopStudents from "../dashboard/TopStudents";
+import Verbs from "./sheet/basic-english/Verbs";
+import Vocabularies from "./sheet/basic-english/Vocabularies";
+import Sheet from "./pages/Sheet";
+import Degree from "./sheet/basic-english/Degree";
+import Tense from "./sheet/basic-english/tense/Tense";
 
 const STUDENT_SESSION_KEY = "studentSession";
 
@@ -129,9 +138,14 @@ export default function Router() {
         />
 
         {/* Admin, Teacher and Department Head dashboard */}
-        <Route element={<ProtectedRoute allowedRoles={STAFF_ROLES} />}>
-          <Route path="/" element={<Dashboard />} />
+        <Route
+          path="/"
+          element={
+            <Navigate to={getStudentSession() ? "/portal" : "/login"} replace />
+          }
+        />
 
+        <Route element={<ProtectedRoute allowedRoles={STAFF_ROLES} />}>
           <Route path="/dashboard" element={<Dashboard />} />
         </Route>
 
@@ -164,9 +178,9 @@ export default function Router() {
           />
 
           <Route path="/admin/teachers" element={<AddTeacher />} />
-
+          <Route path="/admin/top" element={<TopStudents />} />
           <Route path="/admin/subjects" element={<Subjects />} />
-
+          <Route path="/monthly-report" element={<MonthlyReport />} />
           <Route path="/admin/villages" element={<AddVillage />} />
         </Route>
 
@@ -194,10 +208,17 @@ export default function Router() {
           <Route path="/exam-list" element={<OnlineExamList />} />
 
           <Route path="/view-syllabus" element={<ViewSyllabus />} />
-
+          <Route path="/todays-vocabulary" element={<TodaysVocabulary />} />
+          <Route path="/todays-verbs" element={<TodaysVerb />} />
           <Route path="/student-exam-result" element={<StudentExamResults />} />
 
           <Route path="/notices" element={<Notices />} />
+
+          <Route path="/sheet" element={<Sheet />} />
+          <Route path="sheet/vocabulary-list" element={<Vocabularies />} />
+          <Route path="sheet/verb-list" element={<Verbs />} />
+          <Route path="sheet/degree-list" element={<Degree />} />
+          <Route path="sheet/tense" element={<Tense />} />
         </Route>
       </Route>
     </Routes>

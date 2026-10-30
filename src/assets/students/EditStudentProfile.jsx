@@ -1,7 +1,14 @@
 import { useEffect, useState } from "react";
 import { useParams } from "react-router";
 
-import { doc, getDoc, updateDoc } from "firebase/firestore";
+import {
+  collection,
+  doc,
+  getDoc,
+  getDocs,
+  updateDoc,
+  serverTimestamp,
+} from "firebase/firestore";
 
 import toast from "react-hot-toast";
 
@@ -10,14 +17,14 @@ import { db } from "../firebase/firebase.init";
 const IMGBB_API_KEY = import.meta.env.VITE_IMGBB_API_KEY;
 
 const initialForm = {
+  name: "",
+  phone: "",
+  villageId: "",
+  villageName: "",
   fatherName: "",
-
   motherName: "",
-
   dateOfBirth: "",
-
   religion: "",
-
   roll: "",
 };
 
@@ -28,117 +35,129 @@ export default function EditStudentProfile({ studentId: studentIdProp } = {}) {
   const studentId = studentIdProp || routeStudentId;
 
   const [student, setStudent] = useState(null);
-
   const [form, setForm] = useState(initialForm);
+  const [villages, setVillages] = useState([]);
 
   const [loading, setLoading] = useState(true);
-
   const [saving, setSaving] = useState(false);
-
   const [uploading, setUploading] = useState(false);
-
   const [deletingImage, setDeletingImage] = useState(false);
 
   const [photo, setPhoto] = useState(null);
-
   const [preview, setPreview] = useState("");
-  // Load student information
+
+  // Load student and villages
   useEffect(() => {
     let active = true;
 
-    async function loadStudent() {
+    async function loadData() {
       if (!studentId) {
         setStudent(null);
-
         setLoading(false);
-
         return;
       }
 
       setLoading(true);
 
       try {
-        const studentRef = doc(db, "students", studentId);
-
-        const snapshot = await getDoc(studentRef);
+        const [studentSnap, villageSnap] = await Promise.all([
+          getDoc(doc(db, "students", studentId)),
+          getDocs(collection(db, "villages")),
+        ]);
 
         if (!active) return;
 
-        if (!snapshot.exists()) {
+        if (!studentSnap.exists()) {
           setStudent(null);
-
           toast.error("শিক্ষার্থীর তথ্য পাওয়া যায়নি।");
-
           return;
         }
 
-        const data = snapshot.data();
+        const data = studentSnap.data();
 
         setStudent(data);
 
         setForm({
+          name: data.name || "",
+          phone: data.phone || data.phoneNormalized || "",
+          villageId: data.villageId || "",
+          villageName: data.villageName || "",
           fatherName: data.fatherName || "",
-
           motherName: data.motherName || "",
-
           dateOfBirth: data.dateOfBirth || "",
-
           religion: data.religion || "",
-
           roll: data.roll == null ? "" : String(data.roll),
         });
-        // Support common image field names.
+
         setPreview(
           data.photoURL || data.photoUrl || data.photo || data.image || "",
         );
+
+        const villageList = villageSnap.docs
+          .map((item) => ({
+            id: item.id,
+            ...item.data(),
+          }))
+          .sort((a, b) =>
+            String(a.name || "").localeCompare(String(b.name || ""), "bn"),
+          );
+
+        setVillages(villageList);
       } catch (error) {
         console.error("Load student error:", error);
 
         if (active) {
-          toast.error("শিক্ষার্থীর তথ্য লোড করা যায়নি।");
+          toast.error("তথ্য লোড করা যায়নি।");
         }
       } finally {
         if (active) setLoading(false);
       }
     }
 
-    loadStudent();
+    loadData();
 
     return () => {
       active = false;
     };
   }, [studentId]);
-  // Form input handler
+
   function handleChange(event) {
     const { name, value } = event.target;
 
     setForm((previous) => ({
       ...previous,
-
       [name]: value,
     }));
   }
-  // Resize and crop image to 200 × 200 pixels
+
+  function handleVillageChange(event) {
+    const villageId = event.target.value;
+
+    const selectedVillage = villages.find(
+      (village) => village.id === villageId,
+    );
+
+    setForm((previous) => ({
+      ...previous,
+      villageId,
+      villageName: selectedVillage?.name || "",
+    }));
+  }
+
+  // Resize and crop image to 200 × 200
   async function resizeImage(file) {
     const objectUrl = URL.createObjectURL(file);
-
     const image = new Image();
 
     try {
       await new Promise((resolve, reject) => {
         image.onload = resolve;
-
-        image.onerror = () => {
-          reject(new Error("ছবিটি পড়া যায়নি।"));
-        };
-
+        image.onerror = () => reject(new Error("ছবিটি পড়া যায়নি।"));
         image.src = objectUrl;
       });
 
       const canvas = document.createElement("canvas");
-
       canvas.width = 200;
-
       canvas.height = 200;
 
       const context = canvas.getContext("2d");
@@ -148,25 +167,16 @@ export default function EditStudentProfile({ studentId: studentIdProp } = {}) {
       }
 
       const size = Math.min(image.width, image.height);
-
       const sx = (image.width - size) / 2;
-
       const sy = (image.height - size) / 2;
 
       context.drawImage(image, sx, sy, size, size, 0, 0, 200, 200);
 
       return await new Promise((resolve, reject) => {
         canvas.toBlob(
-          (blob) => {
-            if (blob) {
-              resolve(blob);
-            } else {
-              reject(new Error("ছবি রিসাইজ করা যায়নি।"));
-            }
-          },
-
+          (blob) =>
+            blob ? resolve(blob) : reject(new Error("ছবি রিসাইজ করা যায়নি।")),
           "image/jpeg",
-
           0.9,
         );
       });
@@ -174,67 +184,53 @@ export default function EditStudentProfile({ studentId: studentIdProp } = {}) {
       URL.revokeObjectURL(objectUrl);
     }
   }
-  // Select a new profile photo
+
   function handlePhotoSelect(event) {
     const file = event.target.files?.[0];
-    // Allow selecting the same file again.
     event.target.value = "";
 
     if (!file) return;
 
     if (!file.type.startsWith("image/")) {
       toast.error("অনুগ্রহ করে একটি ছবি নির্বাচন করুন।");
-
       return;
     }
 
     if (file.size > 5 * 1024 * 1024) {
       toast.error("ছবির সাইজ সর্বোচ্চ ৫ MB হতে পারবে।");
-
       return;
     }
-    // A previous photo must be deleted first.
-    if (preview) {
-      toast.error("নতুন ছবি দেওয়ার আগে আগের ছবিটি মুছুন।");
 
+    if (preview) {
+      toast.error("নতুন ছবি দিতে হলে আগে আগের ছবিটি মুছুন।");
       return;
     }
 
     setPhoto(file);
-
-    const objectUrl = URL.createObjectURL(file);
-
-    setPreview(objectUrl);
+    setPreview(URL.createObjectURL(file));
   }
-  // Delete the previous ImageBB photo
+
+  // Delete previous photo
   async function handleDeletePhoto() {
     if (deletingImage || saving || uploading) return;
 
     if (!preview) {
       setPhoto(null);
-
       return;
     }
 
-    const confirmed = window.confirm(
-      "আপনি কি বর্তমান প্রোফাইল ছবিটি মুছে ফেলতে চান?",
-    );
-
-    if (!confirmed) return;
+    if (!window.confirm("আপনি কি বর্তমান প্রোফাইল ছবিটি মুছতে চান?")) {
+      return;
+    }
 
     setDeletingImage(true);
 
     try {
-      // If the photo has not been uploaded yet,  // remove only the local selection.
       if (photo) {
         URL.revokeObjectURL(preview);
-
         setPhoto(null);
-
         setPreview("");
-
         toast.success("নির্বাচিত ছবি সরানো হয়েছে।");
-
         return;
       }
 
@@ -242,48 +238,40 @@ export default function EditStudentProfile({ studentId: studentIdProp } = {}) {
 
       if (!deleteURL) {
         toast.error("ছবি মুছে ফেলার লিংক পাওয়া যায়নি।");
-
         return;
       }
 
-      const response = await fetch(deleteURL, {
-        method: "GET",
-      });
+      const response = await fetch(deleteURL);
 
       if (!response.ok) {
         throw new Error("ImageBB ছবি মুছতে পারেনি।");
       }
-      // Remove the image URL from the student document.
+
       await updateDoc(doc(db, "students", studentId), {
         photoURL: "",
-
         photoDeleteURL: "",
+        updatedAt: serverTimestamp(),
       });
 
       setStudent((previous) => ({
         ...previous,
-
         photoURL: "",
-
         photoDeleteURL: "",
       }));
 
       setPreview("");
-
       setPhoto(null);
 
-      toast.success("আগের ছবি মুছে ফেলা হয়েছে।");
+      toast.success("প্রোফাইল ছবি মুছে ফেলা হয়েছে।");
     } catch (error) {
       console.error("Delete photo error:", error);
-
-      toast.error(
-        "ছবি মুছতে সমস্যা হয়েছে। ImageBB-এর Delete URL বা CORS পরীক্ষা করুন।",
-      );
+      toast.error("ছবি মুছতে সমস্যা হয়েছে।");
     } finally {
       setDeletingImage(false);
     }
   }
-  // Upload the resized photo to ImageBB
+
+  // Upload photo
   async function uploadPhoto() {
     if (!photo) return null;
 
@@ -295,17 +283,14 @@ export default function EditStudentProfile({ studentId: studentIdProp } = {}) {
 
     try {
       const resizedBlob = await resizeImage(photo);
-
       const body = new FormData();
 
       body.append("image", resizedBlob, "student-profile.jpg");
 
       const response = await fetch(
         `https://api.imgbb.com/1/upload?key=${IMGBB_API_KEY}`,
-
         {
           method: "POST",
-
           body,
         },
       );
@@ -318,24 +303,36 @@ export default function EditStudentProfile({ studentId: studentIdProp } = {}) {
 
       return {
         photoURL: result.data.url,
-
         photoDeleteURL: result.data.delete_url,
       };
     } finally {
       setUploading(false);
     }
   }
-  // Save student profile
+
+  // Save profile
   async function handleSubmit(event) {
     event.preventDefault();
 
     if (!studentId || !student) {
       toast.error("শিক্ষার্থীর তথ্য পাওয়া যায়নি।");
-
       return;
     }
 
     if (saving || uploading || deletingImage) return;
+
+    const name = form.name.trim();
+    const phone = form.phone.replace(/\s+/g, "");
+
+    if (!name) {
+      toast.error("শিক্ষার্থীর নাম লিখুন।");
+      return;
+    }
+
+    if (!/^01[3-9]\d{8}$/.test(phone)) {
+      toast.error("সঠিক ১১ সংখ্যার বাংলাদেশি মোবাইল নম্বর দিন।");
+      return;
+    }
 
     setSaving(true);
 
@@ -343,45 +340,45 @@ export default function EditStudentProfile({ studentId: studentIdProp } = {}) {
       let photoData = {};
 
       if (photo) {
-        const uploadedPhoto = await uploadPhoto();
-
-        if (uploadedPhoto) {
-          photoData = uploadedPhoto;
-        }
+        photoData = (await uploadPhoto()) || {};
       }
 
       const updatedData = {
+        name,
+        phone,
+        phoneNormalized: phone,
+
+        villageId: form.villageId,
+        villageName: form.villageName,
+
         fatherName: form.fatherName.trim(),
-
         motherName: form.motherName.trim(),
-
         dateOfBirth: form.dateOfBirth,
-
         religion: form.religion,
-
         roll: form.roll.trim(),
 
         ...photoData,
+
+        updatedAt: serverTimestamp(),
       };
-      // Update only profile fields. Other fields remain unchanged.
+
+      // Only profile fields are updated.
+      // approved, isActive, pin, currentMark, batchId etc. remain unchanged.
       await updateDoc(doc(db, "students", studentId), updatedData);
 
       setStudent((previous) => ({
         ...previous,
-
         ...updatedData,
       }));
 
       if (photoData.photoURL) {
         setPreview(photoData.photoURL);
-
         setPhoto(null);
       }
 
       toast.success("প্রোফাইল সফলভাবে আপডেট হয়েছে।");
     } catch (error) {
       console.error("Update profile error:", error);
-
       toast.error(error.message || "প্রোফাইল আপডেট করা যায়নি।");
     } finally {
       setSaving(false);
@@ -389,13 +386,12 @@ export default function EditStudentProfile({ studentId: studentIdProp } = {}) {
   }
 
   const busy = saving || uploading || deletingImage;
-  // Initial loading
+
   if (loading) {
     return (
       <div className="flex min-h-72 items-center justify-center">
         <div className="flex flex-col items-center gap-3">
           <span className="loading loading-spinner loading-lg text-primary" />
-
           <p className="text-sm text-base-content/60">
             শিক্ষার্থীর তথ্য লোড হচ্ছে...
           </p>
@@ -417,22 +413,17 @@ export default function EditStudentProfile({ studentId: studentIdProp } = {}) {
   return (
     <div className="mx-auto w-full max-w-3xl p-4 sm:p-6">
       <div className="rounded-2xl border border-base-300 bg-base-100 p-5 shadow-sm sm:p-8">
-        {/* Header */}
-
         <div className="mb-7">
           <h1 className="text-2xl font-bold text-base-content">
             প্রোফাইল সম্পাদনা
           </h1>
-
           <p className="mt-2 text-sm leading-6 text-base-content/60">
-            আপনার অতিরিক্ত তথ্য এখানে যোগ বা পরিবর্তন করুন। সব তথ্য দেওয়া
-            ঐচ্ছিক।
+            শিক্ষার্থীর ব্যক্তিগত তথ্য যোগ বা পরিবর্তন করুন।
           </p>
         </div>
 
         <form onSubmit={handleSubmit}>
           {/* Profile Photo */}
-
           <div className="mb-8 flex flex-col items-center rounded-2xl border border-base-300 bg-base-200/30 p-6">
             <div className="relative">
               <div className="h-[200px] w-[200px] overflow-hidden rounded-full border-4 border-base-100 bg-base-200 shadow-md">
@@ -467,7 +458,6 @@ export default function EditStudentProfile({ studentId: studentIdProp } = {}) {
               {(uploading || deletingImage) && (
                 <div className="absolute inset-0 flex flex-col items-center justify-center rounded-full bg-black/60 text-white">
                   <span className="loading loading-spinner loading-lg" />
-
                   <span className="mt-3 text-sm font-medium">
                     {uploading
                       ? "ছবি আপলোড হচ্ছে..."
@@ -477,10 +467,7 @@ export default function EditStudentProfile({ studentId: studentIdProp } = {}) {
               )}
             </div>
 
-            <p className="mt-4 text-sm font-medium text-base-content">
-              প্রোফাইল ছবি
-            </p>
-
+            <p className="mt-4 text-sm font-medium">প্রোফাইল ছবি</p>
             <p className="mt-1 text-xs text-base-content/60">
               200 × 200 px · সর্বোচ্চ 5 MB
             </p>
@@ -492,14 +479,7 @@ export default function EditStudentProfile({ studentId: studentIdProp } = {}) {
                 disabled={busy}
                 className="btn btn-outline btn-error btn-sm mt-4"
               >
-                {deletingImage ? (
-                  <>
-                    <span className="loading loading-spinner loading-xs" />
-                    মুছে ফেলা হচ্ছে...
-                  </>
-                ) : (
-                  "আগের ছবি মুছুন"
-                )}
+                আগের ছবি মুছুন
               </button>
             ) : (
               <label
@@ -507,15 +487,7 @@ export default function EditStudentProfile({ studentId: studentIdProp } = {}) {
                   busy ? "pointer-events-none opacity-50" : ""
                 }`}
               >
-                {uploading ? (
-                  <>
-                    <span className="loading loading-spinner loading-xs" />
-                    আপলোড হচ্ছে...
-                  </>
-                ) : (
-                  "ছবি নির্বাচন করুন"
-                )}
-
+                ছবি নির্বাচন করুন
                 <input
                   type="file"
                   accept="image/*"
@@ -531,20 +503,16 @@ export default function EditStudentProfile({ studentId: studentIdProp } = {}) {
                 <p className="text-sm text-success">
                   নতুন ছবি নির্বাচিত হয়েছে।
                 </p>
-
                 <p className="mt-1 text-xs text-base-content/60">
                   প্রোফাইল সেভ করলে ছবিটি আপলোড হবে।
                 </p>
-
                 <button
                   type="button"
                   className="btn btn-ghost btn-xs mt-1"
                   disabled={busy}
                   onClick={() => {
                     URL.revokeObjectURL(preview);
-
                     setPhoto(null);
-
                     setPreview("");
                   }}
                 >
@@ -552,30 +520,81 @@ export default function EditStudentProfile({ studentId: studentIdProp } = {}) {
                 </button>
               </div>
             )}
-
-            <p className="mt-3 text-center text-xs text-base-content/50">
-              নতুন ছবি দিতে হলে প্রথমে আগের ছবিটি মুছুন।
-            </p>
           </div>
 
-          {/* Additional Information */}
-
+          {/* Personal Information */}
           <div className="mb-5">
             <h2 className="text-lg font-semibold">ব্যক্তিগত তথ্য</h2>
-
             <p className="mt-1 text-xs text-base-content/60">
-              প্রয়োজন অনুযায়ী তথ্য পূরণ করুন।
+              প্রয়োজন অনুযায়ী তথ্য পরিবর্তন করুন।
             </p>
           </div>
 
           <div className="grid grid-cols-1 gap-x-5 gap-y-4 sm:grid-cols-2">
-            {/* Father's Name */}
+            {/* Name */}
+            <div className="form-control">
+              <label htmlFor="name" className="label">
+                <span className="label-text font-medium">শিক্ষার্থীর নাম</span>
+              </label>
+              <input
+                id="name"
+                name="name"
+                type="text"
+                value={form.name}
+                onChange={handleChange}
+                placeholder="শিক্ষার্থীর নাম লিখুন"
+                className="input input-bordered w-full"
+                disabled={busy}
+                required
+              />
+            </div>
 
+            {/* Phone */}
+            <div className="form-control">
+              <label htmlFor="phone" className="label">
+                <span className="label-text font-medium">মোবাইল নম্বর</span>
+              </label>
+              <input
+                id="phone"
+                name="phone"
+                type="tel"
+                inputMode="numeric"
+                maxLength={11}
+                value={form.phone}
+                onChange={handleChange}
+                placeholder="01XXXXXXXXX"
+                className="input input-bordered w-full"
+                disabled={busy}
+                required
+              />
+            </div>
+
+            {/* Village */}
+            <div className="form-control sm:col-span-2">
+              <label htmlFor="villageId" className="label">
+                <span className="label-text font-medium">গ্রাম</span>
+              </label>
+              <select
+                id="villageId"
+                value={form.villageId}
+                onChange={handleVillageChange}
+                className="select select-bordered w-full"
+                disabled={busy}
+              >
+                <option value="">গ্রাম নির্বাচন করুন</option>
+                {villages.map((village) => (
+                  <option key={village.id} value={village.id}>
+                    {village.name}
+                  </option>
+                ))}
+              </select>
+            </div>
+
+            {/* Father's Name */}
             <div className="form-control">
               <label htmlFor="fatherName" className="label">
                 <span className="label-text font-medium">বাবার নাম</span>
               </label>
-
               <input
                 id="fatherName"
                 name="fatherName"
@@ -589,12 +608,10 @@ export default function EditStudentProfile({ studentId: studentIdProp } = {}) {
             </div>
 
             {/* Mother's Name */}
-
             <div className="form-control">
               <label htmlFor="motherName" className="label">
                 <span className="label-text font-medium">মায়ের নাম</span>
               </label>
-
               <input
                 id="motherName"
                 name="motherName"
@@ -608,12 +625,10 @@ export default function EditStudentProfile({ studentId: studentIdProp } = {}) {
             </div>
 
             {/* Date of Birth */}
-
             <div className="form-control">
               <label htmlFor="dateOfBirth" className="label">
                 <span className="label-text font-medium">জন্মতারিখ</span>
               </label>
-
               <input
                 id="dateOfBirth"
                 name="dateOfBirth"
@@ -626,12 +641,10 @@ export default function EditStudentProfile({ studentId: studentIdProp } = {}) {
             </div>
 
             {/* Religion */}
-
             <div className="form-control">
               <label htmlFor="religion" className="label">
                 <span className="label-text font-medium">ধর্ম</span>
               </label>
-
               <select
                 id="religion"
                 name="religion"
@@ -641,7 +654,6 @@ export default function EditStudentProfile({ studentId: studentIdProp } = {}) {
                 disabled={busy}
               >
                 <option value="">ধর্ম নির্বাচন করুন</option>
-
                 {religionOptions.map((religion) => (
                   <option key={religion} value={religion}>
                     {religion}
@@ -651,12 +663,10 @@ export default function EditStudentProfile({ studentId: studentIdProp } = {}) {
             </div>
 
             {/* Roll */}
-
             <div className="form-control sm:col-span-2">
               <label htmlFor="roll" className="label">
                 <span className="label-text font-medium">রোল নম্বর</span>
               </label>
-
               <input
                 id="roll"
                 name="roll"
@@ -671,8 +681,7 @@ export default function EditStudentProfile({ studentId: studentIdProp } = {}) {
             </div>
           </div>
 
-          {/* Save Button */}
-
+          {/* Actions */}
           <div className="mt-8 flex flex-col-reverse gap-3 sm:flex-row sm:justify-end">
             <button
               type="button"

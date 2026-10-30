@@ -1,9 +1,11 @@
 import { useEffect, useState } from "react";
+
 import {
   signInWithEmailAndPassword,
   sendPasswordResetEmail,
   signOut,
 } from "firebase/auth";
+
 import {
   collection,
   query,
@@ -13,11 +15,27 @@ import {
   getDoc,
   limit,
 } from "firebase/firestore";
+
 import { Navigate, useNavigate, useOutletContext } from "react-router";
+
 import toast from "react-hot-toast";
+
+import {
+  MdPerson,
+  MdLock,
+  MdVisibility,
+  MdVisibilityOff,
+  MdArrowForward,
+  MdMenuBook,
+  MdShield,
+} from "react-icons/md";
 
 import { auth, db } from "../firebase/firebase.init";
 import { getUserRole } from "../../config/permissions";
+
+/* =========================================================
+   Configuration
+========================================================= */
 
 const MAX_ATTEMPTS = 3;
 const LOCKOUT_TIME = 60 * 60 * 1000;
@@ -27,11 +45,15 @@ const STUDENT_SESSION_KEY = "studentSession";
 
 const STAFF_ROLES = ["admin", "teacher", "departmenthead", "exam-controller"];
 
-const roles = [
+const ROLES = [
   { value: "student", label: "শিক্ষার্থী" },
   { value: "teacher", label: "শিক্ষক" },
   { value: "admin", label: "অ্যাডমিন" },
 ];
+
+/* =========================================================
+   Helpers
+========================================================= */
 
 const normalizeStudentId = (value) =>
   String(value ?? "")
@@ -59,7 +81,10 @@ const getLockData = (identifier) => {
       lockedUntil: Number(data.lockedUntil) || 0,
     };
   } catch {
-    return { attempts: 0, lockedUntil: 0 };
+    return {
+      attempts: 0,
+      lockedUntil: 0,
+    };
   }
 };
 
@@ -115,77 +140,17 @@ const isAccountInactive = (profile) => {
   );
 };
 
-function Icon({ name, size = 20 }) {
-  const common = {
-    width: size,
-    height: size,
-    viewBox: "0 0 24 24",
-    fill: "none",
-    stroke: "currentColor",
-    strokeWidth: 1.8,
-    strokeLinecap: "round",
-    strokeLinejoin: "round",
-    "aria-hidden": true,
-  };
+const readTheme = () => {
+  try {
+    return localStorage.getItem(THEME_KEY) === "dark" ? "dark" : "light";
+  } catch {
+    return "light";
+  }
+};
 
-  const paths = {
-    user: (
-      <>
-        <circle cx="12" cy="8" r="4" />
-        <path d="M5 21a7 7 0 0 1 14 0" />
-      </>
-    ),
-    lock: (
-      <>
-        <rect x="4" y="10" width="16" height="11" rx="2" />
-        <path d="M8 10V7a4 4 0 0 1 8 0v3" />
-      </>
-    ),
-    eye: (
-      <>
-        <path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7S2 12 2 12Z" />
-        <circle cx="12" cy="12" r="3" />
-      </>
-    ),
-    eyeOff: (
-      <>
-        <path d="m3 3 18 18" />
-        <path d="M10.6 10.6a2 2 0 0 0 2.8 2.8" />
-        <path d="M9.9 5.2A11 11 0 0 1 12 5c6.5 0 10 7 10 7a15 15 0 0 1-4 4.7" />
-        <path d="M6.2 6.2C3.5 8.1 2 12 2 12s3.5 7 10 7a10 10 0 0 0 3.4-.6" />
-      </>
-    ),
-    sun: (
-      <>
-        <circle cx="12" cy="12" r="4" />
-        <path d="M12 2v2m0 16v2M4.93 4.93l1.42 1.42m11.3 11.3 1.42 1.42M2 12h2m16 0h2M4.93 19.07l1.42-1.42m11.3-11.3 1.42-1.42" />
-      </>
-    ),
-    moon: (
-      <path d="M20.5 14.5A8.5 8.5 0 0 1 9.5 3.5 8.5 8.5 0 1 0 20.5 14.5Z" />
-    ),
-    arrow: (
-      <>
-        <path d="M5 12h14" />
-        <path d="m12 5 7 7-7 7" />
-      </>
-    ),
-    book: (
-      <>
-        <path d="M4 5.5A2.5 2.5 0 0 1 6.5 3H20v16H6.5A2.5 2.5 0 0 0 4 21.5Z" />
-        <path d="M4 5.5v16M8 7h8m-8 4h8" />
-      </>
-    ),
-    shield: (
-      <>
-        <path d="M12 22s8-4 8-11V5l-8-3-8 3v6c0 7 8 11 8 11Z" />
-        <path d="m9 12 2 2 4-4" />
-      </>
-    ),
-  };
-
-  return <svg {...common}>{paths[name] || paths.user}</svg>;
-}
+/* =========================================================
+   Existing Session Redirect
+========================================================= */
 
 function ExistingSessionRedirect() {
   const { user } = useOutletContext() || {};
@@ -223,10 +188,17 @@ function ExistingSessionRedirect() {
   return null;
 }
 
+/* =========================================================
+   Login Component
+========================================================= */
+
 export default function Login() {
   const navigate = useNavigate();
+
   const outletContext = useOutletContext() || {};
   const { user } = outletContext;
+
+  /* Form state */
 
   const [selectedRole, setSelectedRole] = useState("student");
   const [identifier, setIdentifier] = useState("");
@@ -236,27 +208,53 @@ export default function Login() {
   const [loading, setLoading] = useState(false);
   const [resetLoading, setResetLoading] = useState(false);
 
-  const [theme, setTheme] = useState(() => {
-    try {
-      return localStorage.getItem(THEME_KEY) || "light";
-    } catch {
-      return "light";
-    }
-  });
+  /* Theme state */
+
+  const [theme, setTheme] = useState(readTheme);
+
+  const isDark = theme === "dark";
+
+  /* =======================================================
+     Sync Theme With Header
+  ======================================================= */
 
   useEffect(() => {
-    document.documentElement.setAttribute("data-theme", theme);
+    const syncTheme = (event) => {
+      const nextTheme =
+        event?.detail === "dark" || event?.detail === "light"
+          ? event.detail
+          : readTheme();
 
-    try {
-      localStorage.setItem(THEME_KEY, theme);
-    } catch {
-      // Theme persistence is optional.
-    }
-  }, [theme]);
+      setTheme(nextTheme);
+    };
 
-  const locked = isLocked(identifier);
-  const lockData = getLockData(identifier);
+    window.addEventListener("topline-theme-change", syncTheme);
+    window.addEventListener("storage", syncTheme);
+
+    return () => {
+      window.removeEventListener("topline-theme-change", syncTheme);
+      window.removeEventListener("storage", syncTheme);
+    };
+  }, []);
+
+  /* =======================================================
+     Login Lockout State
+  ======================================================= */
+
+  const cleanIdentifier =
+    selectedRole === "student"
+      ? normalizeStudentId(identifier)
+      : normalizeEmail(identifier);
+
+  const lockData = getLockData(cleanIdentifier);
+
+  const locked = isLocked(cleanIdentifier);
+
   const remainingAttempts = Math.max(0, MAX_ATTEMPTS - lockData.attempts);
+
+  /* =======================================================
+     Password Reset
+  ======================================================= */
 
   const handlePasswordReset = async () => {
     const email = normalizeEmail(identifier);
@@ -281,8 +279,10 @@ export default function Login() {
       console.error("Password reset error:", error);
 
       const messages = {
-        "auth/user-not-found": "এই ইমেইলে কোনো অ্যাকাউন্ট পাওয়া যায়নি।",
+        "auth/user-not-found": "এই ইমেইলে কোনো অ্যাকাউন্ট পাওয়া যায়নি.",
+
         "auth/invalid-email": "ইমেইল ঠিকানা সঠিক নয়।",
+
         "auth/too-many-requests":
           "অনেকবার চেষ্টা করেছেন। পরে আবার চেষ্টা করুন।",
       };
@@ -292,6 +292,10 @@ export default function Login() {
       setResetLoading(false);
     }
   };
+
+  /* =======================================================
+     Student Login
+  ======================================================= */
 
   const handleStudentLogin = async () => {
     const studentId = normalizeStudentId(identifier);
@@ -310,15 +314,13 @@ export default function Login() {
     try {
       setLoading(true);
 
-      let studentSnapshot;
-
       const studentQuery = query(
         collection(db, "students"),
         where("studentId", "==", studentId),
         limit(1),
       );
 
-      studentSnapshot = await getDocs(studentQuery);
+      const studentSnapshot = await getDocs(studentQuery);
 
       if (studentSnapshot.empty) {
         toast.error("Student ID অথবা PIN সঠিক নয়।");
@@ -333,7 +335,7 @@ export default function Login() {
       ).trim();
 
       if (!savedPin || savedPin !== enteredPin) {
-        toast.error("Student ID অথবা PIN সঠিক নয়।");
+        toast.error("Student ID অথবা PIN সঠিক নয়.");
         return;
       }
 
@@ -351,24 +353,33 @@ export default function Login() {
         role: "student",
         documentId: studentDoc.id,
         studentId: String(student.studentId || studentId),
+
         name: student.name || "",
+
         departmentId: student.departmentId ?? "",
         departmentName: student.departmentName || "",
+
         classId: student.classId ?? "",
         className: student.className || "",
+
         batchId: student.batchId ?? "",
         batchName: student.batchName || "",
+
         isCR: student.isCR === true,
+
         loginAt: Date.now(),
       };
 
+      // Save the student session.
+      // Do not remove this session after saving it.
       localStorage.setItem(STUDENT_SESSION_KEY, JSON.stringify(session));
-
-      localStorage.removeItem(STUDENT_SESSION_KEY);
 
       clearLoginAttempts(studentId);
 
+      window.dispatchEvent(new Event("topline-session-change"));
+
       toast.success("লগইন সফল হয়েছে!");
+
       navigate("/portal", { replace: true });
     } catch (error) {
       console.error("Student login error:", error);
@@ -384,6 +395,10 @@ export default function Login() {
       setLoading(false);
     }
   };
+
+  /* =======================================================
+     Staff Login
+  ======================================================= */
 
   const handleStaffLogin = async () => {
     const email = normalizeEmail(identifier);
@@ -411,9 +426,10 @@ export default function Login() {
 
       /*
        * Admin:
-       * permissions.js-এ তালিকাভুক্ত email হলে Firestore profile
-       * ছাড়াই Dashboard-এ প্রবেশ করতে পারবে।
+       * permissions.js-এ তালিকাভুক্ত email হলে
+       * Firestore profile ছাড়াই Dashboard-এ প্রবেশ করতে পারবে।
        */
+
       const emailBasedRole = getUserRole({
         email: firebaseUser.email,
         uid: firebaseUser.uid,
@@ -423,6 +439,7 @@ export default function Login() {
         clearLoginAttempts(email);
 
         toast.success("Admin লগইন সফল হয়েছে!");
+
         navigate("/dashboard", { replace: true });
         return;
       }
@@ -431,7 +448,9 @@ export default function Login() {
        * Non-admin staff:
        * Firestore users/{uid} profile প্রয়োজন।
        */
+
       const profileRef = doc(db, "users", firebaseUser.uid);
+
       const profileSnap = await getDoc(profileRef);
 
       if (!profileSnap.exists()) {
@@ -440,6 +459,7 @@ export default function Login() {
         toast.error(
           "আপনার ব্যবহারকারীর প্রোফাইল পাওয়া যায়নি। Admin-এর সঙ্গে যোগাযোগ করুন।",
         );
+
         return;
       }
 
@@ -448,7 +468,7 @@ export default function Login() {
       if (isAccountInactive(profile)) {
         await signOut(auth);
 
-        toast.error("আপনার অ্যাকাউন্ট নিষ্ক্রিয় রয়েছে।");
+        toast.error("আপনার অ্যাকাউন্ট নিষ্ক্রিয় রয়েছে.");
         return;
       }
 
@@ -462,6 +482,7 @@ export default function Login() {
         await signOut(auth);
 
         toast.error("আপনার অ্যাকাউন্টের ভূমিকা নির্ধারণ করা যায়নি।");
+
         return;
       }
 
@@ -469,23 +490,30 @@ export default function Login() {
         await signOut(auth);
 
         toast.error("আপনার নির্বাচিত ভূমিকা সঠিক নয়।");
+
         return;
       }
 
       clearLoginAttempts(email);
 
       toast.success("লগইন সফল হয়েছে!");
+
       navigate("/dashboard", { replace: true });
     } catch (error) {
       console.error("Staff login error:", error);
 
       const messages = {
         "auth/invalid-credential": "ইমেইল অথবা পাসওয়ার্ড সঠিক নয়।",
+
         "auth/invalid-email": "ইমেইল ঠিকানা সঠিক নয়।",
+
         "auth/user-not-found": "এই ইমেইলে কোনো অ্যাকাউন্ট পাওয়া যায়নি।",
+
         "auth/wrong-password": "পাসওয়ার্ড সঠিক নয়।",
+
         "auth/too-many-requests":
           "অনেকবার চেষ্টা করেছেন। কিছুক্ষণ পরে আবার চেষ্টা করুন।",
+
         "auth/network-request-failed": "ইন্টারনেট সংযোগ পরীক্ষা করুন।",
       };
 
@@ -501,30 +529,40 @@ export default function Login() {
     }
   };
 
+  /* =======================================================
+     Submit
+  ======================================================= */
+
   const handleSubmit = async (event) => {
     event.preventDefault();
 
     if (loading || resetLoading) return;
 
-    const cleanIdentifier =
+    const currentIdentifier =
       selectedRole === "student"
         ? normalizeStudentId(identifier)
         : normalizeEmail(identifier);
 
-    if (!cleanIdentifier) {
+    if (!currentIdentifier) {
       toast.error(
         selectedRole === "student" ? "Student ID লিখুন।" : "ইমেইল লিখুন।",
       );
+
       return;
     }
 
-    if (isLocked(cleanIdentifier)) {
-      const data = getLockData(cleanIdentifier);
+    if (isLocked(currentIdentifier)) {
+      const data = getLockData(currentIdentifier);
+
       const minutes = Math.ceil((data.lockedUntil - Date.now()) / 60000);
 
       toast.error(
-        `অনেকবার ভুল চেষ্টা করেছেন। ${Math.max(1, minutes)} মিনিট পরে চেষ্টা করুন।`,
+        `অনেকবার ভুল চেষ্টা করেছেন। ${Math.max(
+          1,
+          minutes,
+        )} মিনিট পরে চেষ্টা করুন।`,
       );
+
       return;
     }
 
@@ -532,6 +570,7 @@ export default function Login() {
       toast.error(
         selectedRole === "student" ? "PIN লিখুন।" : "পাসওয়ার্ড লিখুন।",
       );
+
       return;
     }
 
@@ -542,42 +581,50 @@ export default function Login() {
     }
   };
 
+  /* =======================================================
+     Styling Helpers
+  ======================================================= */
+
+  const mutedText = isDark ? "text-slate-400" : "text-slate-500";
+
+  const inputClasses = [
+    "input input-bordered w-full pl-10 transition-colors",
+    isDark
+      ? "border-slate-700 bg-slate-800 text-slate-100 placeholder:text-slate-500 focus:border-[#e74c3c]"
+      : "border-slate-200 bg-white text-slate-800 placeholder:text-slate-400 focus:border-[#e74c3c]",
+  ].join(" ");
+
+  /* =======================================================
+     UI
+  ======================================================= */
+
   return (
     <>
       <ExistingSessionRedirect />
 
       <main
-        className={`min-h-screen ${
-          theme === "dark"
-            ? "bg-slate-950 text-slate-100"
-            : "bg-slate-50 text-slate-800"
-        } flex items-center justify-center px-4 py-8 transition-colors`}
+        className={[
+          "flex min-h-screen items-center justify-center",
+          "px-4 py-8 transition-colors duration-200",
+          isDark ? "bg-slate-950 text-slate-100" : "bg-slate-50 text-slate-800",
+        ].join(" ")}
       >
         <div className="w-full max-w-md">
-          <div className="mb-5 flex justify-end">
-            <button
-              type="button"
-              onClick={() =>
-                setTheme((current) => (current === "dark" ? "light" : "dark"))
-              }
-              className="btn btn-ghost btn-sm gap-2"
-              aria-label="থিম পরিবর্তন"
-            >
-              <Icon name={theme === "dark" ? "sun" : "moon"} size={18} />
-              {theme === "dark" ? "Light mode" : "Dark mode"}
-            </button>
-          </div>
+          {/* Login Card */}
 
           <section
-            className={`overflow-hidden rounded-3xl border shadow-xl ${
-              theme === "dark"
+            className={[
+              "overflow-hidden rounded-3xl border shadow-xl",
+              isDark
                 ? "border-slate-800 bg-slate-900"
-                : "border-slate-200 bg-white"
-            }`}
+                : "border-slate-200 bg-white",
+            ].join(" ")}
           >
+            {/* Brand Header */}
+
             <div className="bg-[#2c3e50] px-7 py-8 text-center text-white">
               <div className="mx-auto mb-4 flex h-16 w-16 items-center justify-center rounded-2xl bg-white/10">
-                <Icon name="book" size={32} />
+                <MdMenuBook size={34} aria-hidden="true" />
               </div>
 
               <h1 className="text-2xl font-bold">টপলাইন শিক্ষা</h1>
@@ -589,39 +636,44 @@ export default function Login() {
               <div className="mx-auto mt-4 h-1 w-16 rounded-full bg-[#e74c3c]" />
             </div>
 
+            {/* Form Content */}
+
             <div className="p-6 sm:p-8">
               <div className="mb-6">
                 <h2 className="text-xl font-bold">লগইন করুন</h2>
 
-                <p
-                  className={`mt-1 text-sm ${
-                    theme === "dark" ? "text-slate-400" : "text-slate-500"
-                  }`}
-                >
+                <p className={`mt-1 text-sm ${mutedText}`}>
                   আপনার অ্যাকাউন্টের তথ্য দিয়ে প্রবেশ করুন।
                 </p>
               </div>
 
+              {/* Role Selector */}
+
               <div className="mb-6 grid grid-cols-3 gap-2">
-                {roles.map((role) => {
+                {ROLES.map((role) => {
                   const active = selectedRole === role.value;
 
                   return (
                     <button
                       key={role.value}
                       type="button"
+                      disabled={loading}
                       onClick={() => {
                         setSelectedRole(role.value);
                         setIdentifier("");
                         setPassword("");
+                        setShowPassword(false);
                       }}
-                      className={`rounded-xl border px-2 py-3 text-sm font-semibold transition ${
+                      className={[
+                        "rounded-xl border px-2 py-3",
+                        "text-sm font-semibold transition-colors",
+                        "disabled:cursor-not-allowed disabled:opacity-60",
                         active
                           ? "border-[#e74c3c] bg-[#e74c3c]/10 text-[#e74c3c]"
-                          : theme === "dark"
+                          : isDark
                             ? "border-slate-700 text-slate-300 hover:bg-slate-800"
-                            : "border-slate-200 text-slate-600 hover:bg-slate-50"
-                      }`}
+                            : "border-slate-200 text-slate-600 hover:bg-slate-50",
+                      ].join(" ")}
                     >
                       {role.label}
                     </button>
@@ -629,7 +681,11 @@ export default function Login() {
                 })}
               </div>
 
+              {/* Login Form */}
+
               <form onSubmit={handleSubmit} className="space-y-5">
+                {/* Student ID / Email */}
+
                 <div>
                   <label
                     htmlFor="identifier"
@@ -639,13 +695,11 @@ export default function Login() {
                   </label>
 
                   <div className="relative">
-                    <span
-                      className={`pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 ${
-                        theme === "dark" ? "text-slate-400" : "text-slate-400"
-                      }`}
-                    >
-                      <Icon name="user" size={19} />
-                    </span>
+                    <MdPerson
+                      size={20}
+                      aria-hidden="true"
+                      className={`pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 ${mutedText}`}
+                    />
 
                     <input
                       id="identifier"
@@ -664,14 +718,12 @@ export default function Login() {
                           : "name@example.com"
                       }
                       disabled={loading}
-                      className={`input input-bordered w-full pl-10 ${
-                        theme === "dark"
-                          ? "border-slate-700 bg-slate-800"
-                          : "bg-white"
-                      }`}
+                      className={inputClasses}
                     />
                   </div>
                 </div>
+
+                {/* Password / PIN */}
 
                 <div>
                   <div className="mb-2 flex items-center justify-between gap-3">
@@ -694,22 +746,16 @@ export default function Login() {
                   </div>
 
                   <div className="relative">
-                    <span
-                      className={`pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 ${
-                        theme === "dark" ? "text-slate-400" : "text-slate-400"
-                      }`}
-                    >
-                      <Icon name="lock" size={19} />
-                    </span>
+                    <MdLock
+                      size={20}
+                      aria-hidden="true"
+                      className={`pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 ${mutedText}`}
+                    />
 
                     <input
                       id="password"
                       type={showPassword ? "text" : "password"}
-                      autoComplete={
-                        selectedRole === "student"
-                          ? "current-password"
-                          : "current-password"
-                      }
+                      autoComplete="current-password"
                       value={password}
                       onChange={(event) => setPassword(event.target.value)}
                       placeholder={
@@ -718,46 +764,57 @@ export default function Login() {
                           : "আপনার পাসওয়ার্ড লিখুন"
                       }
                       disabled={loading}
-                      className={`input input-bordered w-full pl-10 pr-12 ${
-                        theme === "dark"
-                          ? "border-slate-700 bg-slate-800"
-                          : "bg-white"
-                      }`}
+                      className={`${inputClasses} pr-12`}
                     />
 
                     <button
                       type="button"
                       onClick={() => setShowPassword((current) => !current)}
-                      className={`absolute right-3 top-1/2 -translate-y-1/2 ${
-                        theme === "dark" ? "text-slate-400" : "text-slate-500"
-                      }`}
+                      className={[
+                        "absolute right-3 top-1/2",
+                        "-translate-y-1/2 transition-colors",
+                        isDark
+                          ? "text-slate-400 hover:text-slate-200"
+                          : "text-slate-500 hover:text-slate-800",
+                      ].join(" ")}
                       aria-label={
                         showPassword ? "পাসওয়ার্ড লুকান" : "পাসওয়ার্ড দেখুন"
                       }
                     >
-                      <Icon name={showPassword ? "eyeOff" : "eye"} size={19} />
+                      {showPassword ? (
+                        <MdVisibilityOff size={21} aria-hidden="true" />
+                      ) : (
+                        <MdVisibility size={21} aria-hidden="true" />
+                      )}
                     </button>
                   </div>
                 </div>
 
+                {/* Lockout Message */}
+
                 {locked && (
-                  <div className="alert alert-error text-sm">
-                    <span>
-                      অনেকবার ভুল চেষ্টা হয়েছে। কিছুক্ষণ পরে আবার চেষ্টা করুন।
-                    </span>
+                  <div className="rounded-xl border border-red-300 bg-red-50 p-3 text-sm text-red-700 dark:border-red-900 dark:bg-red-950/30 dark:text-red-300">
+                    অনেকবার ভুল চেষ্টা হয়েছে। কিছুক্ষণ পরে আবার চেষ্টা করুন।
                   </div>
                 )}
 
                 {!locked && lockData.attempts > 0 && remainingAttempts > 0 && (
-                  <p className="text-xs text-warning">
+                  <p className="text-xs text-amber-600 dark:text-amber-400">
                     বাকি চেষ্টা: {remainingAttempts}
                   </p>
                 )}
 
+                {/* Submit Button */}
+
                 <button
                   type="submit"
                   disabled={loading || resetLoading || locked}
-                  className="btn w-full border-0 bg-[#e74c3c] text-white hover:bg-[#cf3f30]"
+                  className={[
+                    "btn w-full border-0",
+                    "bg-[#e74c3c] text-white",
+                    "hover:bg-[#cf3f30]",
+                    "disabled:bg-slate-400",
+                  ].join(" ")}
                 >
                   {loading ? (
                     <>
@@ -767,22 +824,27 @@ export default function Login() {
                   ) : (
                     <>
                       লগইন করুন
-                      <Icon name="arrow" size={18} />
+                      <MdArrowForward size={20} aria-hidden="true" />
                     </>
                   )}
                 </button>
               </form>
 
+              {/* Security Message */}
+
               <div
-                className={`mt-6 flex items-start gap-3 rounded-xl p-4 text-sm ${
-                  theme === "dark"
+                className={[
+                  "mt-6 flex items-start gap-3 rounded-xl p-4 text-sm",
+                  isDark
                     ? "bg-slate-800 text-slate-300"
-                    : "bg-slate-50 text-slate-600"
-                }`}
+                    : "bg-slate-50 text-slate-600",
+                ].join(" ")}
               >
-                <span className="mt-0.5 text-[#e74c3c]">
-                  <Icon name="shield" size={20} />
-                </span>
+                <MdShield
+                  size={22}
+                  aria-hidden="true"
+                  className="mt-0.5 shrink-0 text-[#e74c3c]"
+                />
 
                 <p>
                   আপনার অ্যাকাউন্টের তথ্য নিরাপদে রাখুন। অন্য কারও সঙ্গে
@@ -791,14 +853,6 @@ export default function Login() {
               </div>
             </div>
           </section>
-
-          <p
-            className={`mt-5 text-center text-xs ${
-              theme === "dark" ? "text-slate-500" : "text-slate-400"
-            }`}
-          >
-            © {new Date().getFullYear()} TopLine Education Management
-          </p>
         </div>
       </main>
     </>

@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { collection, getDocs } from "firebase/firestore";
+import { collection, onSnapshot, query, where } from "firebase/firestore";
 import { motion } from "framer-motion";
 
 import { departments } from "../../config/departments";
@@ -7,20 +7,8 @@ import { db } from "../firebase/firebase.init";
 
 const MONTHLY_CLASS_TARGET = 20;
 
-const MONTH_NAMES = [
-  "জানুয়ারি",
-  "ফেব্রুয়ারি",
-  "মার্চ",
-  "এপ্রিল",
-  "মে",
-  "জুন",
-  "জুলাই",
-  "আগস্ট",
-  "সেপ্টেম্বর",
-  "অক্টোবর",
-  "নভেম্বর",
-  "ডিসেম্বর",
-];
+const toBangla = (value) =>
+  String(value).replace(/\d/g, (digit) => "০১২৩৪৫৬৭৮৯"[digit]);
 
 const normalizeName = (value) =>
   String(value ?? "")
@@ -86,7 +74,6 @@ function toDate(value) {
 
   if (typeof value === "string" || typeof value === "number") {
     const date = new Date(value);
-
     return Number.isNaN(date.getTime()) ? null : date;
   }
 
@@ -155,12 +142,13 @@ function getDateString(value) {
   return `${year}-${month}-${day}`;
 }
 
-function getSessionDate(session) {
+// Works for attendance records (and old session records).
+function getSessionDate(record) {
   return getDateString(
-    session?.date ??
-      session?.sessionDate ??
-      session?.attendanceDate ??
-      session?.createdAt,
+    record?.date ??
+      record?.sessionDate ??
+      record?.attendanceDate ??
+      record?.createdAt,
   );
 }
 
@@ -174,22 +162,13 @@ function getMonthEnd(record) {
   return getDateString(record?.endDate ?? record?.monthEnd ?? record?.toDate);
 }
 
+// Batch month, not calendar month.
 function getMonthName(monthNumber) {
-  return MONTH_NAMES[Number(monthNumber) - 1] ?? "মাস";
+  return `মাস ${toBangla(monthNumber)}`;
 }
 
-function isCompletedSession(session) {
-  const status = normalizeName(session?.status);
-
-  return (
-    session?.completed === true ||
-    status === "completed" ||
-    status === "complete"
-  );
-}
-
-function isSessionWithinMonth(session, month) {
-  const sessionDate = getSessionDate(session);
+function isSessionWithinMonth(record, month) {
+  const sessionDate = getSessionDate(record);
 
   if (!sessionDate) return false;
 
@@ -215,7 +194,8 @@ export default function MonthlyProgress({
   onViewAll,
 }) {
   const [months, setMonths] = useState([]);
-  const [sessions, setSessions] = useState([]);
+  // Attendance records for this batch (one per student per day).
+  const [attendanceRecords, setAttendanceRecords] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
 
@@ -228,33 +208,42 @@ export default function MonthlyProgress({
     [student, department],
   );
 
+  // Realtime Firestore updates
   useEffect(() => {
-    let cancelled = false;
-
-    async function loadProgress() {
-      if (!student || !departmentName || !className) {
-        setMonths([]);
-        setSessions([]);
-        setError("");
-        setLoading(false);
-        return;
-      }
-
-      setLoading(true);
+    if (!departmentName || !className) {
+      setMonths([]);
+      setAttendanceRecords([]);
       setError("");
+      setLoading(false);
+      return;
+    }
 
-      try {
-        const [monthSnapshot, sessionSnapshot] = await Promise.all([
-          getDocs(collection(db, "batchMonthStates")),
-          getDocs(collection(db, "attendanceSessions")),
-        ]);
+    setLoading(true);
+    setError("");
 
-        if (cancelled) return;
+    let pending = 2;
 
-        const departmentKey = normalizeName(departmentName);
-        const classKey = normalizeName(className);
+    const handleLoaded = () => {
+      pending -= 1;
 
-        const monthRecords = monthSnapshot.docs
+      if (pending === 0) {
+        setLoading(false);
+      }
+    };
+
+    const handleError = (err) => {
+      console.error("Monthly progress loading failed:", err);
+      setError("অগ্রগতির তথ্য লোড করা যায়নি।");
+      setLoading(false);
+    };
+
+    const departmentKey = normalizeName(departmentName);
+    const classKey = normalizeName(className);
+
+    const unsubscribeMonths = onSnapshot(
+      collection(db, "batchMonthStates"),
+      (snapshot) => {
+        const records = snapshot.docs
           .map((item) => ({
             id: item.id,
             ...item.data(),
@@ -273,40 +262,38 @@ export default function MonthlyProgress({
               : getMonthNumber(a) - getMonthNumber(b);
           });
 
-        const attendanceRecords = sessionSnapshot.docs
-          .map((item) => ({
+        setMonths(records);
+        handleLoaded();
+      },
+      handleError,
+    );
+
+    // Read attendance directly. AddAttendance saves className = batch name.
+    const unsubscribeAttendance = onSnapshot(
+      query(
+        collection(db, "attendance"),
+        where("departmentName", "==", departmentName),
+        where("className", "==", className),
+      ),
+      (snapshot) => {
+        setAttendanceRecords(
+          snapshot.docs.map((item) => ({
             id: item.id,
             ...item.data(),
-          }))
-          .filter(
-            (record) =>
-              normalizeName(getRecordDepartmentName(record)) ===
-                departmentKey &&
-              normalizeName(getRecordClassName(record)) === classKey,
-          );
-
-        setMonths(monthRecords);
-        setSessions(attendanceRecords);
-      } catch (err) {
-        console.error("Monthly progress loading failed:", err);
-
-        if (!cancelled) {
-          setError("অগ্রগতির তথ্য লোড করা যায়নি।");
-          setMonths([]);
-          setSessions([]);
-        }
-      } finally {
-        if (!cancelled) setLoading(false);
-      }
-    }
-
-    loadProgress();
+          })),
+        );
+        handleLoaded();
+      },
+      handleError,
+    );
 
     return () => {
-      cancelled = true;
+      unsubscribeMonths();
+      unsubscribeAttendance();
     };
-  }, [student, departmentName, className]);
+  }, [departmentName, className]);
 
+  // Current active month or latest month
   const currentMonth = useMemo(() => {
     const activeMonth = months.find(
       (month) => normalizeName(month.status) === "active",
@@ -315,16 +302,23 @@ export default function MonthlyProgress({
     return activeMonth ?? months.at(-1) ?? null;
   }, [months]);
 
-  const currentMonthSessions = useMemo(() => {
+  // Attendance records inside current month
+  const currentMonthRecords = useMemo(() => {
     if (!currentMonth) return [];
 
-    return sessions.filter((session) =>
-      isSessionWithinMonth(session, currentMonth),
+    return attendanceRecords.filter((record) =>
+      isSessionWithinMonth(record, currentMonth),
     );
-  }, [sessions, currentMonth]);
+  }, [attendanceRecords, currentMonth]);
 
-  const completedClasses =
-    currentMonthSessions.filter(isCompletedSession).length;
+  // One class = one unique attendance date for this batch.
+  const completedClasses = useMemo(() => {
+    const dates = new Set(
+      currentMonthRecords.map(getSessionDate).filter(Boolean),
+    );
+
+    return dates.size;
+  }, [currentMonthRecords]);
 
   const target = Math.max(
     1,
@@ -344,7 +338,7 @@ export default function MonthlyProgress({
   const isActive = normalizeName(currentMonth?.status) === "active";
 
   const monthLabel = currentMonth
-    ? `${getMonthName(getMonthNumber(currentMonth))} ${getYear(currentMonth)}`
+    ? getMonthName(getMonthNumber(currentMonth))
     : "";
 
   if (loading) {
@@ -379,7 +373,7 @@ export default function MonthlyProgress({
 
     return (
       <div className="rounded-xl border border-slate-200 bg-white p-4 text-sm text-slate-500 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-400">
-        {className} ব্যাচের মাসিক অগ্রগতির তথ্য এখনো তৈরি হয়নি।
+        {className} ব্যাচের মাসিক অগ্রগতির তথ্য এখনো তৈরি হয়নি।
       </div>
     );
   }
@@ -390,8 +384,6 @@ export default function MonthlyProgress({
       animate={{ opacity: 1, y: 0 }}
       className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm transition-colors dark:border-slate-700 dark:bg-slate-900 sm:p-5"
     >
-      {/* Heading */}
-
       <div className="flex items-start justify-between gap-3">
         <div className="min-w-0">
           <p className="text-xs font-medium text-slate-500 dark:text-slate-400">
@@ -418,30 +410,26 @@ export default function MonthlyProgress({
         </span>
       </div>
 
-      {/* Progress summary */}
-
       <div className="mt-5 flex items-end justify-between gap-3">
         <div>
           <p className="text-2xl font-bold tracking-tight text-slate-900 dark:text-white">
-            {completedClasses}
+            {toBangla(completedClasses)}
             <span className="ml-1 text-sm font-medium text-slate-400 dark:text-slate-500">
-              / {target} ক্লাস
+              / {toBangla(target)} ক্লাস
             </span>
           </p>
 
           <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">
             {percentage === 100
-              ? "মাসিক ক্লাসের লক্ষ্য পূরণ হয়েছে"
-              : `আর ${Math.max(0, target - completedClasses)}টি ক্লাস বাকি`}
+              ? "মাসিক ক্লাসের লক্ষ্য পূরণ হয়েছে"
+              : `আর ${toBangla(Math.max(0, target - completedClasses))}টি ক্লাস বাকি`}
           </p>
         </div>
 
         <span className="text-lg font-bold tabular-nums text-blue-600 dark:text-blue-400">
-          {percentage}%
+          {toBangla(percentage)}%
         </span>
       </div>
-
-      {/* Progress bar */}
 
       <div
         className="mt-3 h-2.5 overflow-hidden rounded-full bg-slate-100 dark:bg-slate-800"

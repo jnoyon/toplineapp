@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { useNavigate } from "react-router";
+import { Link, useNavigate } from "react-router";
 import { onAuthStateChanged } from "firebase/auth";
 import {
   collection,
@@ -439,11 +439,11 @@ export default function ManageOnlineExams() {
         {/* Do not show any exam before subject selection */}
         {!selectedSubject ? (
           <section className="rounded-2xl border border-dashed border-slate-300 bg-white px-5 py-14 text-center dark:border-slate-700 dark:bg-slate-900">
-            <FiBookOpen size={38} className="mx-auto mb-3 text-slate-400" />
-            <h2 className="font-bold">প্রথমে একটি বিষয় নির্বাচন করুন</h2>
-            <p className="mt-1 text-sm text-slate-500 dark:text-slate-400">
-              বিষয় নির্বাচন করার পর সেই বিষয়ের পরীক্ষাগুলো এখানে দেখা যাবে।
-            </p>
+            <div className="flex">
+              <Link to="/create-exam" className="btn btn-secondary w-full">
+                নতুন পরীক্ষা নিন
+              </Link>
+            </div>
           </section>
         ) : loading ? (
           <div className="flex min-h-48 items-center justify-center">

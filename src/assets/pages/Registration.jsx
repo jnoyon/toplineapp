@@ -27,10 +27,18 @@ const inputClass =
 
 const labelClass = "mb-2 block text-sm font-semibold text-base-content";
 
+const SESSION_KEY = "studentSession";
+
+/* =========================================================
+   Helpers
+========================================================= */
+
 function normalizePhone(phone) {
   let number = String(phone || "").replace(/\D/g, "");
 
-  if (number.startsWith("00880")) number = number.slice(2);
+  if (number.startsWith("00880")) {
+    number = number.slice(2);
+  }
 
   if (number.startsWith("880")) {
     number = `0${number.slice(3)}`;
@@ -44,8 +52,23 @@ function normalizePhone(phone) {
 function generatePin() {
   const values = new Uint32Array(1);
   crypto.getRandomValues(values);
+
   return String(values[0] % 10000).padStart(4, "0");
 }
+
+async function copyToClipboard(value, label) {
+  try {
+    await navigator.clipboard.writeText(String(value));
+    toast.success(`${label} কপি হয়েছে।`);
+  } catch (error) {
+    console.error("Clipboard error:", error);
+    toast.error("কপি করা যায়নি। তথ্যটি নির্বাচন করে কপি করুন।");
+  }
+}
+
+/* =========================================================
+   Component
+========================================================= */
 
 export default function Registration() {
   const navigate = useNavigate();
@@ -56,6 +79,9 @@ export default function Registration() {
   const [loading, setLoading] = useState(true);
   const [submitting, setSubmitting] = useState(false);
 
+  // Successful registration details shown in the modal.
+  const [registrationSuccess, setRegistrationSuccess] = useState(null);
+
   const department = departmentList.find(
     (item) => String(item.id) === form.departmentId,
   );
@@ -63,35 +89,56 @@ export default function Registration() {
   const isCare = department?.type === "batch";
   const classes = department?.classes || [];
 
+  /* =========================================================
+     Load Villages
+  ========================================================= */
+
   useEffect(() => {
+    let mounted = true;
+
     async function loadVillages() {
       try {
         const snapshot = await getDocs(collection(db, "villages"));
 
-        setVillages(
-          snapshot.docs
-            .map((item) => ({
-              id: item.id,
-              ...item.data(),
-            }))
-            .filter((item) => item.isActive !== false)
-            .sort((a, b) =>
-              String(a.name || a.villageName || "").localeCompare(
-                String(b.name || b.villageName || ""),
-                "bn",
-              ),
+        if (!mounted) return;
+
+        const villageList = snapshot.docs
+          .map((item) => ({
+            id: item.id,
+            ...item.data(),
+          }))
+          .filter((item) => item.isActive !== false)
+          .sort((a, b) =>
+            String(a.name || a.villageName || "").localeCompare(
+              String(b.name || b.villageName || ""),
+              "bn",
             ),
-        );
+          );
+
+        setVillages(villageList);
       } catch (error) {
         console.error("Village loading error:", error);
-        toast.error("গ্রামের তথ্য লোড করা যায়নি।");
+
+        if (mounted) {
+          toast.error("গ্রামের তথ্য লোড করা যায়নি।");
+        }
       } finally {
-        setLoading(false);
+        if (mounted) {
+          setLoading(false);
+        }
       }
     }
 
     loadVillages();
+
+    return () => {
+      mounted = false;
+    };
   }, []);
+
+  /* =========================================================
+     Form Handlers
+  ========================================================= */
 
   function handleChange(event) {
     const { name, value } = event.target;
@@ -99,7 +146,12 @@ export default function Registration() {
     setForm((previous) => ({
       ...previous,
       [name]: value,
-      ...(name === "departmentId" ? { classId: "", gender: "" } : {}),
+      ...(name === "departmentId"
+        ? {
+            classId: "",
+            gender: "",
+          }
+        : {}),
     }));
   }
 
@@ -113,6 +165,10 @@ export default function Registration() {
     }));
   }
 
+  /* =========================================================
+     Registration
+  ========================================================= */
+
   async function handleSubmit(event) {
     event.preventDefault();
 
@@ -120,47 +176,64 @@ export default function Registration() {
 
     const name = form.name.trim();
     const phone = normalizePhone(form.phone);
+
     const villageName = customVillage
       ? form.customVillage.trim()
       : (() => {
           const village = villages.find((item) => item.id === form.villageId);
+
           return village?.name || village?.villageName || "";
         })();
 
-    if (!name) return toast.error("শিক্ষার্থীর নাম লিখুন।");
+    if (!name) {
+      toast.error("শিক্ষার্থীর নাম লিখুন।");
+      return;
+    }
 
     if (!/^01[3-9]\d{8}$/.test(phone)) {
-      return toast.error("সঠিক বাংলাদেশি মোবাইল নম্বর লিখুন।");
+      toast.error("সঠিক বাংলাদেশি মোবাইল নম্বর লিখুন।");
+      return;
     }
 
     if (!villageName) {
-      return toast.error("গ্রাম বা এলাকার নাম লিখুন অথবা নির্বাচন করুন।");
+      toast.error("গ্রাম বা এলাকার নাম লিখুন অথবা নির্বাচন করুন।");
+      return;
     }
 
-    if (customVillage && villageName.length > 100) {
-      return toast.error("গ্রামের নাম ১০০ অক্ষরের মধ্যে লিখুন।");
+    if (villageName.length > 100) {
+      toast.error("গ্রামের নাম ১০০ অক্ষরের মধ্যে লিখুন।");
+      return;
     }
 
     if (!department) {
-      return toast.error("বিভাগ নির্বাচন করুন।");
+      toast.error("বিভাগ নির্বাচন করুন।");
+      return;
     }
 
     if (!form.gender) {
-      return toast.error("শিক্ষার্থীর লিঙ্গ নির্বাচন করুন।");
+      toast.error("শিক্ষার্থীর Gender নির্বাচন করুন।");
+      return;
     }
 
-    const selectedClass = classes.find((item) => item.id === form.classId);
+    const selectedClass = classes.find(
+      (item) => String(item.id) === form.classId,
+    );
 
     if (!selectedClass) {
-      return toast.error(
-        isCare ? "ব্যাচ নির্বাচন করুন।" : "শ্রেণি নির্বাচন করুন।",
-      );
+      toast.error(isCare ? "ব্যাচ নির্বাচন করুন।" : "শ্রেণি নির্বাচন করুন।");
+      return;
     }
 
     setSubmitting(true);
 
     try {
-      // Check for an existing phone number.
+      /*
+       * Check for duplicate phone numbers.
+       *
+       * Note: This client-side scan is suitable only for a small
+       * student collection. For a larger system, use a dedicated
+       * phone index with a transaction or a trusted backend.
+       */
       const studentsSnapshot = await getDocs(collection(db, "students"));
 
       const duplicate = studentsSnapshot.docs.some((item) => {
@@ -179,19 +252,25 @@ export default function Registration() {
 
       const genderNumber = form.gender === "male" ? "1" : "2";
       const prefix = `${department.id}${genderNumber}`;
-      const pin = generatePin();
 
       let studentId = "";
+      let generatedPin = "";
 
-      // Generate a unique student ID.
+      /*
+       * Reserve an unused student ID through a transaction.
+       * IDs follow the existing department + gender + serial format.
+       */
       for (let serial = 1; serial <= 999; serial++) {
         const candidate = `${prefix}${String(serial).padStart(3, "0")}`;
         const studentRef = doc(db, "students", candidate);
+        const pin = generatePin();
 
         const created = await runTransaction(db, async (transaction) => {
           const existing = await transaction.get(studentRef);
 
-          if (existing.exists()) return false;
+          if (existing.exists()) {
+            return false;
+          }
 
           transaction.set(studentRef, {
             studentId: candidate,
@@ -224,6 +303,7 @@ export default function Registration() {
 
         if (created) {
           studentId = candidate;
+          generatedPin = pin;
           break;
         }
       }
@@ -232,8 +312,12 @@ export default function Registration() {
         throw new Error("Student ID তৈরি করা যায়নি।");
       }
 
+      /*
+       * Save the session for compatibility with the current portal.
+       * The student still requires admin approval.
+       */
       localStorage.setItem(
-        "studentSession",
+        SESSION_KEY,
         JSON.stringify({
           documentId: studentId,
           studentId,
@@ -244,9 +328,19 @@ export default function Registration() {
         }),
       );
 
-      toast.success("নিবন্ধনের আবেদন সফলভাবে জমা হয়েছে!");
+      /*
+       * Show the credentials before navigating to the portal.
+       */
+      setRegistrationSuccess({
+        studentId,
+        password: generatedPin,
+        name,
+      });
+
       setForm(initialForm);
-      navigate("/portal", { replace: true });
+      setCustomVillage(false);
+
+      toast.success("নিবন্ধনের আবেদন সফলভাবে জমা হয়েছে!");
     } catch (error) {
       console.error("Registration error:", error);
 
@@ -260,10 +354,24 @@ export default function Registration() {
     }
   }
 
+  /* =========================================================
+     Close Success Modal
+  ========================================================= */
+
+  function goToPortal() {
+    setRegistrationSuccess(null);
+    navigate("/portal", { replace: true });
+  }
+
+  /* =========================================================
+     Render
+  ========================================================= */
+
   return (
     <main className="relative min-h-screen overflow-hidden bg-base-200 px-4 py-8 text-base-content sm:py-12">
       {/* Background decoration */}
       <div className="pointer-events-none absolute -left-24 top-10 h-72 w-72 rounded-full bg-primary/10 blur-3xl" />
+
       <div className="pointer-events-none absolute -right-24 bottom-0 h-80 w-80 rounded-full bg-secondary/10 blur-3xl" />
 
       <div className="relative mx-auto max-w-xl">
@@ -271,6 +379,7 @@ export default function Registration() {
           {/* Header */}
           <header className="relative overflow-hidden bg-gradient-to-br from-primary to-secondary px-6 py-9 text-primary-content sm:px-9 sm:py-11">
             <div className="pointer-events-none absolute -right-12 -top-16 h-52 w-52 rounded-full border border-white/15" />
+
             <div className="pointer-events-none absolute -right-4 -top-8 h-36 w-36 rounded-full border border-white/15" />
 
             <div className="relative">
@@ -293,8 +402,9 @@ export default function Registration() {
             </div>
           </header>
 
-          {/* Form */}
+          {/* Registration Form */}
           <form onSubmit={handleSubmit} className="space-y-5 p-5 sm:p-9">
+            {/* Name */}
             <label className="block">
               <span className={labelClass}>
                 শিক্ষার্থীর পূর্ণ নাম <span className="text-error">*</span>
@@ -312,6 +422,7 @@ export default function Registration() {
               />
             </label>
 
+            {/* Phone */}
             <label className="block">
               <span className={labelClass}>
                 মোবাইল নম্বর <span className="text-error">*</span>
@@ -339,6 +450,7 @@ export default function Registration() {
             <section className="rounded-2xl border border-base-300 bg-base-200/40 p-4 sm:p-5">
               <div className="mb-4">
                 <h2 className="font-bold">গ্রাম / এলাকার তথ্য</h2>
+
                 <p className="mt-1 text-xs text-base-content/60">
                   তালিকা থেকে নির্বাচন করুন অথবা নতুন নাম লিখুন।
                 </p>
@@ -445,12 +557,12 @@ export default function Registration() {
               </select>
             </label>
 
-            {/* Class or batch */}
+            {/* Class or Batch */}
             {department && (
               <label className="block">
                 <span className={labelClass}>
-                  {isCare ? "আপনার ব্যাচ" : "আপনার শ্রেণি"}
-                  <span className="text-error"> *</span>
+                  {isCare ? "আপনার ব্যাচ" : "আপনার শ্রেণি"}{" "}
+                  <span className="text-error">*</span>
                 </span>
 
                 <select
@@ -476,7 +588,7 @@ export default function Registration() {
             {/* Gender */}
             <fieldset>
               <legend className={`${labelClass} mb-3`}>
-                শিক্ষার্থীর লিঙ্গ <span className="text-error">*</span>
+                আপনি একজন <span className="text-error">*</span>
               </legend>
 
               <div className="grid grid-cols-2 gap-3">
@@ -553,6 +665,123 @@ export default function Registration() {
           TopLine Education Management System
         </p>
       </div>
+
+      {/* =====================================================
+          Registration Success Modal
+      ===================================================== */}
+
+      {registrationSuccess && (
+        <div
+          className="modal modal-open"
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="registration-success-title"
+        >
+          <div className="modal-box max-h-[90vh] max-w-md overflow-y-auto rounded-3xl border border-base-300 bg-base-100 p-6 text-base-content shadow-2xl sm:p-8">
+            {/* Success Icon */}
+            <div className="mx-auto mb-4 flex h-16 w-16 items-center justify-center rounded-full bg-success/10 text-3xl font-bold text-success">
+              ✓
+            </div>
+
+            <h2
+              id="registration-success-title"
+              className="text-center text-2xl font-extrabold"
+            >
+              নিবন্ধন সফল হয়েছে!
+            </h2>
+
+            <p className="mt-2 text-center text-sm leading-6 text-base-content/65">
+              {registrationSuccess.name}, আপনার নিবন্ধনের আবেদন জমা হয়েছে। লগইন
+              করার জন্য নিচের তথ্যগুলো সংরক্ষণ করুন।
+            </p>
+
+            {/* Student ID */}
+            <div className="mt-6 rounded-2xl border border-base-300 bg-base-200/60 p-4">
+              <p className="text-xs font-semibold text-base-content/60">
+                Student ID
+              </p>
+
+              <div className="mt-2 flex items-center justify-between gap-3">
+                <span className="select-all break-all text-2xl font-extrabold tracking-wider text-primary">
+                  {registrationSuccess.studentId}
+                </span>
+
+                <button
+                  type="button"
+                  className="btn btn-sm btn-outline shrink-0 rounded-lg"
+                  onClick={() =>
+                    copyToClipboard(registrationSuccess.studentId, "Student ID")
+                  }
+                >
+                  কপি
+                </button>
+              </div>
+            </div>
+
+            {/* Password / PIN */}
+            <div className="mt-4 rounded-2xl border border-base-300 bg-base-200/60 p-4">
+              <p className="text-xs font-semibold text-base-content/60">
+                Password / PIN
+              </p>
+
+              <div className="mt-2 flex items-center justify-between gap-3">
+                <span className="select-all break-all text-2xl font-extrabold tracking-[0.3em] text-secondary">
+                  {registrationSuccess.password}
+                </span>
+
+                <button
+                  type="button"
+                  className="btn btn-sm btn-outline shrink-0 rounded-lg"
+                  onClick={() =>
+                    copyToClipboard(
+                      registrationSuccess.password,
+                      "Password / PIN",
+                    )
+                  }
+                >
+                  কপি
+                </button>
+              </div>
+            </div>
+
+            {/* Warning */}
+            <div className="alert alert-warning mt-5 items-start rounded-xl text-sm">
+              <span>
+                <strong>গুরুত্বপূর্ণ:</strong> Student ID ও PIN লিখে রাখুন।
+                Admin অনুমোদন না দেওয়া পর্যন্ত আপনার অ্যাকাউন্টে প্রবেশ সীমিত
+                থাকতে পারে।
+              </span>
+            </div>
+
+            {/* Actions */}
+            <button
+              type="button"
+              className="btn btn-primary mt-6 w-full rounded-xl"
+              onClick={goToPortal}
+            >
+              পোর্টালে যান
+            </button>
+
+            <button
+              type="button"
+              className="btn btn-ghost mt-2 w-full rounded-xl"
+              onClick={() => setRegistrationSuccess(null)}
+            >
+              পরে যাব
+            </button>
+          </div>
+
+          {/* Clicking outside closes the modal without navigating */}
+          <button
+            type="button"
+            className="modal-backdrop"
+            aria-label="Modal বন্ধ করুন"
+            onClick={() => setRegistrationSuccess(null)}
+          >
+            বন্ধ
+          </button>
+        </div>
+      )}
     </main>
   );
 }

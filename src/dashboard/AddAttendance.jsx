@@ -526,8 +526,13 @@ export default function AddAttendance() {
 
       setStudents(list);
 
-      setAttendance(
-        Object.fromEntries(list.map((student) => [student.docId, true])),
+      setAttendance((previous) =>
+        Object.fromEntries(
+          list.map((student) => [
+            student.docId,
+            previous[student.docId] ?? true,
+          ]),
+        ),
       );
     } catch (error) {
       console.error("Load students error:", error);

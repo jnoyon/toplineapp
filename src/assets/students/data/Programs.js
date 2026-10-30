@@ -2,6 +2,12 @@ export const programs = {
   care: {
     links: [
       {
+        label: "ইন্টারেক্টিভ শীট",
+        description: "ইংরেজি বিষয়",
+        href: "/sheet",
+        icon: "check",
+      },
+      {
         label: "টপলাইন আইসিটি",
         description: "ইন্টারেক্টিভ রিসোর্স",
         href: "https://toplineict.com",
@@ -26,12 +32,7 @@ export const programs = {
         href: "/view-syllabus",
         icon: "calendar",
       },
-      {
-        label: "ক্লাস ডায়েরি",
-        description: "চলমান পড়া",
-        href: "/class-diary",
-        icon: "check",
-      },
+
       {
         label: "ভিডিও ক্লাস",
         description: "ইউটিউব চ্যানেল",

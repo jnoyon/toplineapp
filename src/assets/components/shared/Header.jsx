@@ -179,7 +179,7 @@ export default function Header({ user = null, onMenuClick, onProfileClick }) {
 
   const brandName = isStudent
     ? DEPARTMENTS[departmentId] || "টপলাইন"
-    : "টপলাইন শিক্ষা";
+    : "টপলাইন এডুকেশন";
 
   const roleName = ROLE_NAMES[role] || "ব্যবহারকারী";
 
@@ -408,9 +408,9 @@ export default function Header({ user = null, onMenuClick, onProfileClick }) {
               type="button"
               onClick={onMenuClick}
               aria-label="মেনু খুলুন"
-              className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl text-slate-600 transition hover:bg-slate-100 dark:text-slate-300 dark:hover:bg-slate-800"
+              className="flex h-8 w-8 shrink-0 items-center justify-center rounded-xl text-slate-600 transition hover:bg-slate-100 dark:text-slate-300 dark:hover:bg-slate-800"
             >
-              <MdMenu size={25} />
+              <MdMenu size={20} />
             </button>
           )}
 
@@ -419,17 +419,13 @@ export default function Header({ user = null, onMenuClick, onProfileClick }) {
             onClick={handleBrandClick}
             className="flex min-w-0 items-center gap-2 text-left"
           >
-            <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-[#2C3E50] text-white">
-              <MdAccountCircle size={25} />
+            <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-xl bg-[#2C3E50] text-white">
+              <MdAccountCircle size={20} />
             </span>
 
             <span className="min-w-0">
               <span className="block truncate text-sm font-black text-[#2C3E50] dark:text-white sm:text-base">
                 {brandName}
-              </span>
-
-              <span className="block truncate text-[10px] font-medium text-slate-500 dark:text-slate-400 sm:text-xs">
-                {isStudent ? "শিক্ষার্থী পোর্টাল" : "Education Management"}
               </span>
             </span>
           </button>
@@ -455,6 +451,110 @@ export default function Header({ user = null, onMenuClick, onProfileClick }) {
               <MdDarkMode size={22} />
             )}
           </button>
+
+          {/* User menu */}
+
+          {currentUser ? (
+            <div className="relative" ref={userMenuRef}>
+              <button
+                type="button"
+                onClick={() => {
+                  setUserMenuOpen((open) => !open);
+                  setNotificationOpen(false);
+                }}
+                aria-label="ব্যবহারকারীর মেনু"
+                aria-expanded={userMenuOpen}
+                className="flex max-w-[180px] items-center gap-2 rounded-xl px-2 py-1.5 transition hover:bg-slate-100 dark:hover:bg-slate-800 sm:max-w-[220px]"
+              >
+                <span className="flex h-9 w-9 shrink-0 items-center justify-center overflow-hidden rounded-full bg-[#2C3E50] text-white">
+                  {currentUser.photoURL || currentUser.photoUrl ? (
+                    <img
+                      src={currentUser.photoURL || currentUser.photoUrl}
+                      alt=""
+                      className="h-full w-full object-cover"
+                    />
+                  ) : (
+                    <MdPerson size={23} />
+                  )}
+                </span>
+
+                <span className="hidden min-w-0 text-left sm:block">
+                  <span className="block truncate text-xs font-bold text-slate-800 dark:text-white">
+                    {displayName}
+                  </span>
+                  <span className="block truncate text-[10px] text-slate-500 dark:text-slate-400">
+                    {roleName}
+                  </span>
+                </span>
+
+                <MdKeyboardArrowDown
+                  size={19}
+                  className={`hidden shrink-0 text-slate-400 transition sm:block ${
+                    userMenuOpen ? "rotate-180" : ""
+                  }`}
+                />
+              </button>
+
+              {userMenuOpen && (
+                <div className="absolute right-0 top-12 z-50 w-64 overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-2xl dark:border-slate-700 dark:bg-slate-900">
+                  <div className="border-b border-slate-100 px-4 py-4 dark:border-slate-800">
+                    <p className="truncate text-sm font-black text-slate-800 dark:text-white">
+                      {displayName}
+                    </p>
+
+                    <p className="mt-1 truncate text-xs text-slate-500 dark:text-slate-400">
+                      {isStudent
+                        ? `Student ID: ${studentSession?.studentId ?? "—"}`
+                        : email || roleName}
+                    </p>
+
+                    <span className="mt-2 inline-flex rounded-full bg-slate-100 px-2.5 py-1 text-[10px] font-bold text-slate-600 dark:bg-slate-800 dark:text-slate-300">
+                      {roleName}
+                    </span>
+                  </div>
+
+                  <div className="p-2">
+                    <button
+                      type="button"
+                      onClick={handleProfileClick}
+                      className="flex w-full items-center gap-3 rounded-xl px-3 py-2.5 text-left text-sm font-medium text-slate-700 transition hover:bg-slate-100 dark:text-slate-200 dark:hover:bg-slate-800"
+                    >
+                      <MdPerson size={20} />
+                      আমার প্রোফাইল
+                    </button>
+
+                    {!isStudent && (
+                      <Link
+                        to="/dashboard"
+                        onClick={() => setUserMenuOpen(false)}
+                        className="flex items-center gap-3 rounded-xl px-3 py-2.5 text-sm font-medium text-slate-700 transition hover:bg-slate-100 dark:text-slate-200 dark:hover:bg-slate-800"
+                      >
+                        <MdAccountCircle size={20} />
+                        ড্যাশবোর্ড
+                      </Link>
+                    )}
+
+                    <button
+                      type="button"
+                      onClick={handleLogout}
+                      className="flex w-full items-center gap-3 rounded-xl px-3 py-2.5 text-left text-sm font-bold text-red-600 transition hover:bg-red-50 dark:text-red-400 dark:hover:bg-red-950/30"
+                    >
+                      <MdLogout size={20} />
+                      লগআউট
+                    </button>
+                  </div>
+                </div>
+              )}
+            </div>
+          ) : (
+            <button
+              type="button"
+              onClick={() => navigate("/login")}
+              className="rounded-xl bg-[#2C3E50] px-3 py-2 text-xs font-bold text-white transition hover:bg-[#243442] sm:px-4 sm:text-sm"
+            >
+              লগইন
+            </button>
+          )}
 
           {/* Notifications */}
 
@@ -588,110 +688,6 @@ export default function Header({ user = null, onMenuClick, onProfileClick }) {
                 </div>
               )}
             </div>
-          )}
-
-          {/* User menu */}
-
-          {currentUser ? (
-            <div className="relative" ref={userMenuRef}>
-              <button
-                type="button"
-                onClick={() => {
-                  setUserMenuOpen((open) => !open);
-                  setNotificationOpen(false);
-                }}
-                aria-label="ব্যবহারকারীর মেনু"
-                aria-expanded={userMenuOpen}
-                className="flex max-w-[180px] items-center gap-2 rounded-xl px-2 py-1.5 transition hover:bg-slate-100 dark:hover:bg-slate-800 sm:max-w-[220px]"
-              >
-                <span className="flex h-9 w-9 shrink-0 items-center justify-center overflow-hidden rounded-full bg-[#2C3E50] text-white">
-                  {currentUser.photoURL || currentUser.photoUrl ? (
-                    <img
-                      src={currentUser.photoURL || currentUser.photoUrl}
-                      alt=""
-                      className="h-full w-full object-cover"
-                    />
-                  ) : (
-                    <MdPerson size={23} />
-                  )}
-                </span>
-
-                <span className="hidden min-w-0 text-left sm:block">
-                  <span className="block truncate text-xs font-bold text-slate-800 dark:text-white">
-                    {displayName}
-                  </span>
-                  <span className="block truncate text-[10px] text-slate-500 dark:text-slate-400">
-                    {roleName}
-                  </span>
-                </span>
-
-                <MdKeyboardArrowDown
-                  size={19}
-                  className={`hidden shrink-0 text-slate-400 transition sm:block ${
-                    userMenuOpen ? "rotate-180" : ""
-                  }`}
-                />
-              </button>
-
-              {userMenuOpen && (
-                <div className="absolute right-0 top-12 z-50 w-64 overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-2xl dark:border-slate-700 dark:bg-slate-900">
-                  <div className="border-b border-slate-100 px-4 py-4 dark:border-slate-800">
-                    <p className="truncate text-sm font-black text-slate-800 dark:text-white">
-                      {displayName}
-                    </p>
-
-                    <p className="mt-1 truncate text-xs text-slate-500 dark:text-slate-400">
-                      {isStudent
-                        ? `Student ID: ${studentSession?.studentId ?? "—"}`
-                        : email || roleName}
-                    </p>
-
-                    <span className="mt-2 inline-flex rounded-full bg-slate-100 px-2.5 py-1 text-[10px] font-bold text-slate-600 dark:bg-slate-800 dark:text-slate-300">
-                      {roleName}
-                    </span>
-                  </div>
-
-                  <div className="p-2">
-                    <button
-                      type="button"
-                      onClick={handleProfileClick}
-                      className="flex w-full items-center gap-3 rounded-xl px-3 py-2.5 text-left text-sm font-medium text-slate-700 transition hover:bg-slate-100 dark:text-slate-200 dark:hover:bg-slate-800"
-                    >
-                      <MdPerson size={20} />
-                      আমার প্রোফাইল
-                    </button>
-
-                    {!isStudent && (
-                      <Link
-                        to="/dashboard"
-                        onClick={() => setUserMenuOpen(false)}
-                        className="flex items-center gap-3 rounded-xl px-3 py-2.5 text-sm font-medium text-slate-700 transition hover:bg-slate-100 dark:text-slate-200 dark:hover:bg-slate-800"
-                      >
-                        <MdAccountCircle size={20} />
-                        ড্যাশবোর্ড
-                      </Link>
-                    )}
-
-                    <button
-                      type="button"
-                      onClick={handleLogout}
-                      className="flex w-full items-center gap-3 rounded-xl px-3 py-2.5 text-left text-sm font-bold text-red-600 transition hover:bg-red-50 dark:text-red-400 dark:hover:bg-red-950/30"
-                    >
-                      <MdLogout size={20} />
-                      লগআউট
-                    </button>
-                  </div>
-                </div>
-              )}
-            </div>
-          ) : (
-            <button
-              type="button"
-              onClick={() => navigate("/login")}
-              className="rounded-xl bg-[#2C3E50] px-3 py-2 text-xs font-bold text-white transition hover:bg-[#243442] sm:px-4 sm:text-sm"
-            >
-              লগইন
-            </button>
           )}
         </div>
       </div>

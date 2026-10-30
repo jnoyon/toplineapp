@@ -9,11 +9,25 @@ import {
   where,
 } from "firebase/firestore";
 
+import {
+  FiUser,
+  FiPhone,
+  FiMapPin,
+  FiCalendar,
+  FiShield,
+  FiCheckCircle,
+  FiXCircle,
+  FiBookOpen,
+  FiAward,
+  FiClock,
+  FiUsers,
+} from "react-icons/fi";
+
 import { db } from "../firebase/firebase.init";
 import MonthlyProgress from "./MonthlyProgress";
 
 // ==================================================
-// Helper Functions
+// Helpers
 // ==================================================
 
 export function toBangla(value) {
@@ -40,36 +54,21 @@ export function banglaDate(value) {
 
   if (Number.isNaN(date.getTime())) return "তথ্য নেই";
 
-  const day = String(date.getDate()).padStart(2, "0");
-  const month = String(date.getMonth() + 1).padStart(2, "0");
-  const year = date.getFullYear();
-
-  return toBangla(`${day}/${month}/${year}`);
+  return toBangla(
+    `${String(date.getDate()).padStart(2, "0")}/${String(
+      date.getMonth() + 1,
+    ).padStart(2, "0")}/${date.getFullYear()}`,
+  );
 }
 
 function normalizeId(value) {
   return String(value ?? "").replace(/^0+/, "") || "0";
 }
 
-function getStatus(student) {
-  if (student?.approved === true || student?.status === "approved") {
-    return {
-      label: "অনুমোদিত",
-      className: "bg-green-100 text-green-700",
-    };
-  }
-
-  if (student?.status === "rejected") {
-    return {
-      label: "অননুমোদিত",
-      className: "bg-red-100 text-red-700",
-    };
-  }
-
-  return {
-    label: "অনুমোদনের অপেক্ষায়",
-    className: "bg-amber-100 text-amber-700",
-  };
+function getStudentName(student) {
+  return (
+    student?.name || student?.studentName || student?.fullName || "শিক্ষার্থী"
+  );
 }
 
 function getAttendanceStatus(record) {
@@ -94,66 +93,62 @@ function getAttendanceStatus(record) {
   return "none";
 }
 
-function getDressCodeStatus(value) {
-  if (value === true) return "পরিহিত";
-  if (value === false) return "পরিহিত নয়";
-
-  if (typeof value === "string" && value.trim()) {
-    const normalized = value.trim().toLowerCase();
-
-    if (
-      ["yes", "true", "present", "worn", "পরিহিত", "হ্যাঁ"].includes(normalized)
-    ) {
-      return "পরিহিত";
-    }
-
-    if (
-      ["no", "false", "absent", "not worn", "পরিহিত নয়", "না"].includes(
-        normalized,
-      )
-    ) {
-      return "পরিহিত নয়";
-    }
-
-    return value;
+function getStatus(student) {
+  if (student?.approved === true || student?.status === "approved") {
+    return {
+      label: "অনুমোদিত",
+      icon: FiCheckCircle,
+      className: "bg-green-500/10 text-green-600",
+    };
   }
 
-  return "তথ্য নেই";
-}
+  if (student?.status === "rejected") {
+    return {
+      label: "অননুমোদিত",
+      icon: FiXCircle,
+      className: "bg-red-500/10 text-red-600",
+    };
+  }
 
-function getStudentName(student) {
-  return (
-    student?.name || student?.studentName || student?.fullName || "শিক্ষার্থী"
-  );
+  return {
+    label: "অনুমোদনের অপেক্ষায়",
+    icon: FiClock,
+    className: "bg-amber-500/10 text-amber-600",
+  };
 }
 
 // ==================================================
-// Reusable UI Components
+// Reusable Components
 // ==================================================
 
-function InfoItem({ label, value }) {
-  const displayValue = value === 0 ? "০" : value || "তথ্য নেই";
-
+function Section({ title, icon: Icon, children }) {
   return (
-    <div className="rounded-xl border border-slate-200 bg-slate-50 p-4 dark:border-slate-700 dark:bg-slate-800">
-      <p className="mb-1 text-sm text-slate-500 dark:text-slate-400">{label}</p>
-
-      <p className="break-words font-medium text-slate-800 dark:text-slate-100">
-        {displayValue}
-      </p>
-    </div>
-  );
-}
-
-function Section({ title, children }) {
-  return (
-    <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm dark:border-slate-700 dark:bg-slate-900 sm:p-6">
-      <h2 className="mb-5 border-b border-slate-100 pb-3 text-lg font-bold text-slate-800 dark:border-slate-700 dark:text-slate-100">
+    <section className="rounded-xl border border-base-300 bg-base-100 p-3 shadow-sm sm:p-4">
+      <h2 className="mb-3 flex items-center gap-2 text-sm font-bold sm:text-base">
+        {Icon && <Icon className="text-primary" size={17} />}
         {title}
       </h2>
 
       {children}
     </section>
+  );
+}
+
+function InfoItem({ icon: Icon, label, value }) {
+  return (
+    <div className="flex min-w-0 items-start gap-2.5 rounded-lg bg-base-200/60 p-3">
+      {Icon && (
+        <Icon size={16} className="mt-0.5 shrink-0 text-base-content/50" />
+      )}
+
+      <div className="min-w-0">
+        <p className="text-[11px] text-base-content/50 sm:text-xs">{label}</p>
+
+        <p className="mt-0.5 break-words text-sm font-semibold">
+          {value || "তথ্য নেই"}
+        </p>
+      </div>
+    </div>
   );
 }
 
@@ -164,7 +159,6 @@ function Section({ title, children }) {
 function AttendanceCalendar({ records }) {
   const [selectedMonth, setSelectedMonth] = useState(() => {
     const now = new Date();
-
     return new Date(now.getFullYear(), now.getMonth(), 1);
   });
 
@@ -188,15 +182,6 @@ function AttendanceCalendar({ records }) {
     return map;
   }, [records]);
 
-  const daysInMonth = new Date(year, month + 1, 0).getDate();
-
-  const firstDay = new Date(year, month, 1).getDay();
-
-  const calendarCells = [
-    ...Array(firstDay).fill(null),
-    ...Array.from({ length: daysInMonth }, (_, index) => index + 1),
-  ];
-
   const monthRecords = records.filter((record) => {
     if (!record.date) return false;
 
@@ -207,120 +192,95 @@ function AttendanceCalendar({ records }) {
     return recordYear === year && recordMonth === month + 1;
   });
 
-  const presentCount = monthRecords.filter(
+  const present = monthRecords.filter(
     (record) => getAttendanceStatus(record) === "present",
   ).length;
 
-  const absentCount = monthRecords.filter(
+  const absent = monthRecords.filter(
     (record) => getAttendanceStatus(record) === "absent",
   ).length;
 
-  const total = presentCount + absentCount;
+  const total = present + absent;
 
-  const percentage = total ? Math.round((presentCount / total) * 100) : 0;
+  const percentage = total ? Math.round((present / total) * 100) : 0;
 
-  function changeMonth(amount) {
+  const daysInMonth = new Date(year, month + 1, 0).getDate();
+  const firstDay = new Date(year, month, 1).getDay();
+
+  const cells = [
+    ...Array(firstDay).fill(null),
+    ...Array.from({ length: daysInMonth }, (_, i) => i + 1),
+  ];
+
+  const changeMonth = (amount) => {
     setSelectedMonth(new Date(year, month + amount, 1));
-  }
-
-  function getCellStyle(status) {
-    if (status === "present") {
-      return "border-green-200 bg-green-100 text-green-800 dark:border-green-800 dark:bg-green-950 dark:text-green-300";
-    }
-
-    if (status === "absent") {
-      return "border-red-200 bg-red-100 text-red-800 dark:border-red-800 dark:bg-red-950 dark:text-red-300";
-    }
-
-    return "border-slate-100 bg-slate-50 text-slate-400 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-500";
-  }
+  };
 
   return (
     <div>
-      <div className="mb-5 flex items-center justify-between gap-2">
+      {/* Month Navigation */}
+      <div className="mb-3 flex items-center justify-between gap-2">
         <button
           type="button"
           onClick={() => changeMonth(-1)}
-          className="rounded-lg border border-slate-200 px-3 py-2 text-sm font-medium hover:bg-slate-50 dark:border-slate-700 dark:hover:bg-slate-800"
+          className="btn btn-sm btn-ghost"
         >
-          ← আগের মাস
+          ← আগের
         </button>
 
-        <h3 className="text-center text-base font-bold text-slate-800 dark:text-slate-100 sm:text-lg">
-          {monthName}
-        </h3>
+        <h3 className="text-sm font-bold sm:text-base">{monthName}</h3>
 
         <button
           type="button"
           onClick={() => changeMonth(1)}
-          className="rounded-lg border border-slate-200 px-3 py-2 text-sm font-medium hover:bg-slate-50 dark:border-slate-700 dark:hover:bg-slate-800"
+          className="btn btn-sm btn-ghost"
         >
-          পরের মাস →
+          পরের →
         </button>
       </div>
 
-      <div className="mb-5 grid grid-cols-2 gap-3 sm:grid-cols-4">
-        <div className="rounded-xl bg-slate-50 p-3 text-center dark:bg-slate-800">
-          <p className="text-xs text-slate-500 dark:text-slate-400">
-            মোট রেকর্ড
-          </p>
-          <p className="mt-1 text-xl font-bold text-slate-800 dark:text-slate-100">
-            {toBangla(total)}
-          </p>
-        </div>
-
-        <div className="rounded-xl bg-green-50 p-3 text-center dark:bg-green-950">
-          <p className="text-xs text-green-700 dark:text-green-300">উপস্থিত</p>
-          <p className="mt-1 text-xl font-bold text-green-700 dark:text-green-300">
-            {toBangla(presentCount)}
+      {/* Statistics */}
+      <div className="mb-4 grid grid-cols-3 gap-2">
+        <div className="rounded-lg bg-success/10 p-2.5 text-center">
+          <p className="text-[11px] text-success">উপস্থিত</p>
+          <p className="text-lg font-extrabold text-success">
+            {toBangla(present)}
           </p>
         </div>
 
-        <div className="rounded-xl bg-red-50 p-3 text-center dark:bg-red-950">
-          <p className="text-xs text-red-700 dark:text-red-300">অনুপস্থিত</p>
-          <p className="mt-1 text-xl font-bold text-red-700 dark:text-red-300">
-            {toBangla(absentCount)}
+        <div className="rounded-lg bg-error/10 p-2.5 text-center">
+          <p className="text-[11px] text-error">অনুপস্থিত</p>
+          <p className="text-lg font-extrabold text-error">
+            {toBangla(absent)}
           </p>
         </div>
 
-        <div className="rounded-xl bg-blue-50 p-3 text-center dark:bg-blue-950">
-          <p className="text-xs text-blue-700 dark:text-blue-300">
-            উপস্থিতির হার
-          </p>
-          <p className="mt-1 text-xl font-bold text-blue-700 dark:text-blue-300">
+        <div className="rounded-lg bg-info/10 p-2.5 text-center">
+          <p className="text-[11px] text-info">উপস্থিতির হার</p>
+          <p className="text-lg font-extrabold text-info">
             {toBangla(percentage)}%
           </p>
         </div>
       </div>
 
-      <div className="mb-4 flex flex-wrap gap-4 text-xs text-slate-600 dark:text-slate-300">
-        <span className="flex items-center gap-2">
-          <span className="h-3 w-3 rounded-sm bg-green-500" />
-          উপস্থিত
-        </span>
+      <progress
+        className="progress progress-success mb-4 w-full"
+        value={percentage}
+        max="100"
+      />
 
-        <span className="flex items-center gap-2">
-          <span className="h-3 w-3 rounded-sm bg-red-500" />
-          অনুপস্থিত
-        </span>
-
-        <span className="flex items-center gap-2">
-          <span className="h-3 w-3 rounded-sm bg-slate-300 dark:bg-slate-600" />
-          রেকর্ড নেই
-        </span>
-      </div>
-
-      <div className="grid grid-cols-7 gap-1.5 sm:gap-2">
+      {/* Calendar */}
+      <div className="grid grid-cols-7 gap-1 sm:gap-2">
         {["রবি", "সোম", "মঙ্গল", "বুধ", "বৃহঃ", "শুক্র", "শনি"].map((day) => (
           <div
             key={day}
-            className="py-2 text-center text-xs font-semibold text-slate-500 dark:text-slate-400 sm:text-sm"
+            className="py-1 text-center text-[10px] font-semibold text-base-content/50 sm:text-xs"
           >
             {day}
           </div>
         ))}
 
-        {calendarCells.map((day, index) => {
+        {cells.map((day, index) => {
           if (day === null) {
             return <div key={`empty-${index}`} />;
           }
@@ -331,54 +291,32 @@ function AttendanceCalendar({ records }) {
             String(day).padStart(2, "0"),
           ].join("-");
 
-          const record = recordsByDate.get(dateString);
+          const status = getAttendanceStatus(recordsByDate.get(dateString));
 
-          const status = getAttendanceStatus(record);
-
-          const dressCode =
-            record?.dressCode !== undefined && record?.dressCode !== null
-              ? getDressCodeStatus(record.dressCode)
-              : null;
-
-          const title = [
-            banglaDate(dateString),
+          const color =
             status === "present"
-              ? "উপস্থিত"
+              ? "bg-success/15 text-success border-success/20"
               : status === "absent"
-                ? "অনুপস্থিত"
-                : "রেকর্ড নেই",
-            dressCode ? `ড্রেসকোড: ${dressCode}` : "",
-          ]
-            .filter(Boolean)
-            .join(" | ");
+                ? "bg-error/15 text-error border-error/20"
+                : "bg-base-200/60 text-base-content/50 border-base-300";
 
           return (
             <div
               key={dateString}
-              title={title}
-              className={`flex min-h-14 flex-col items-center justify-center rounded-lg border p-1 sm:min-h-16 ${getCellStyle(
-                status,
-              )}`}
+              title={`${banglaDate(dateString)} - ${
+                status === "present"
+                  ? "উপস্থিত"
+                  : status === "absent"
+                    ? "অনুপস্থিত"
+                    : "রেকর্ড নেই"
+              }`}
+              className={`flex min-h-10 flex-col items-center justify-center rounded-md border text-xs font-semibold sm:min-h-12 sm:text-sm ${color}`}
             >
-              <span className="text-sm font-bold sm:text-base">
-                {toBangla(day)}
-              </span>
+              {toBangla(day)}
 
               {status !== "none" && (
-                <span className="mt-0.5 text-[10px] font-medium sm:text-xs">
+                <span className="mt-0.5 text-[8px] sm:text-[10px]">
                   {status === "present" ? "উপস্থিত" : "অনুপস্থিত"}
-                </span>
-              )}
-
-              {dressCode === "পরিহিত" && (
-                <span className="mt-0.5 text-[9px] sm:text-[10px]">
-                  ড্রেস ✓
-                </span>
-              )}
-
-              {dressCode === "পরিহিত নয়" && (
-                <span className="mt-0.5 text-[9px] sm:text-[10px]">
-                  ড্রেস ✕
                 </span>
               )}
             </div>
@@ -386,9 +324,26 @@ function AttendanceCalendar({ records }) {
         })}
       </div>
 
-      {monthRecords.length === 0 && (
-        <p className="mt-5 rounded-lg bg-slate-50 p-4 text-center text-sm text-slate-500 dark:bg-slate-800 dark:text-slate-400">
-          এই মাসে কোনো উপস্থিতির রেকর্ড পাওয়া যায়নি।
+      <div className="mt-3 flex flex-wrap gap-3 text-[10px] text-base-content/60 sm:text-xs">
+        <span className="flex items-center gap-1">
+          <span className="h-2.5 w-2.5 rounded-sm bg-success" />
+          উপস্থিত
+        </span>
+
+        <span className="flex items-center gap-1">
+          <span className="h-2.5 w-2.5 rounded-sm bg-error" />
+          অনুপস্থিত
+        </span>
+
+        <span className="flex items-center gap-1">
+          <span className="h-2.5 w-2.5 rounded-sm bg-base-300" />
+          রেকর্ড নেই
+        </span>
+      </div>
+
+      {!monthRecords.length && (
+        <p className="mt-3 rounded-lg bg-base-200 p-3 text-center text-xs text-base-content/60">
+          এই মাসে কোনো উপস্থিতির রেকর্ড নেই।
         </p>
       )}
     </div>
@@ -405,11 +360,7 @@ export default function StudentProfile() {
   const studentId = decodeURIComponent(String(routeStudentId ?? ""));
 
   const [student, setStudent] = useState(null);
-  const [department, setDepartment] = useState(null);
-  const [classOrBatch, setClassOrBatch] = useState(null);
-
   const [attendanceRecords, setAttendanceRecords] = useState([]);
-  const [monthStates, setMonthStates] = useState([]);
   const [results, setResults] = useState([]);
 
   const [loading, setLoading] = useState(true);
@@ -423,10 +374,7 @@ export default function StudentProfile() {
       setError("");
 
       setStudent(null);
-      setDepartment(null);
-      setClassOrBatch(null);
       setAttendanceRecords([]);
-      setMonthStates([]);
       setResults([]);
 
       try {
@@ -434,14 +382,11 @@ export default function StudentProfile() {
           throw new Error("Student ID পাওয়া যায়নি।");
         }
 
-        // 1. Student information
-        // Route parameter is the Firestore document ID.
-        const studentRef = doc(db, "students", studentId);
-
-        const studentSnap = await getDoc(studentRef);
+        // Student
+        const studentSnap = await getDoc(doc(db, "students", studentId));
 
         if (!studentSnap.exists()) {
-          throw new Error("এই শিক্ষার্থীর তথ্য পাওয়া যায়নি।");
+          throw new Error("শিক্ষার্থীর তথ্য পাওয়া যায়নি।");
         }
 
         const studentData = {
@@ -453,111 +398,63 @@ export default function StudentProfile() {
 
         setStudent(studentData);
 
-        // Keep the actual student ID separate from document ID.
         const actualStudentId = String(studentData.studentId ?? "");
 
-        // 2. Department
-        const departmentId = normalizeId(studentData.departmentId);
+        // Attendance: support both studentDocId and studentId
+        const attendanceQueries = [];
 
-        const isCare = departmentId === "3";
-
-        const departmentsSnap = await getDocs(collection(db, "departments"));
-
-        const departmentData = departmentsSnap.docs
-          .map((item) => ({
-            id: item.id,
-            ...item.data(),
-          }))
-          .find(
-            (item) =>
-              normalizeId(item.id) === departmentId ||
-              normalizeId(item.departmentId) === departmentId,
+        if (studentSnap.id) {
+          attendanceQueries.push(
+            getDocs(
+              query(
+                collection(db, "attendance"),
+                where("studentDocId", "==", studentSnap.id),
+              ),
+            ),
           );
-
-        if (active) {
-          setDepartment(departmentData ?? null);
         }
 
-        // 3. Class or batch
-        const classId = String(
-          isCare ? (studentData.batchId ?? "") : (studentData.classId ?? ""),
-        );
-
-        if (classId) {
-          const classSnap = await getDoc(doc(db, "classes", classId));
-
-          if (active && classSnap.exists()) {
-            setClassOrBatch({
-              id: classSnap.id,
-              ...classSnap.data(),
-            });
-          }
-        }
-
-        // 4. Attendance
-        // Assumes attendance.studentId stores the actual Student ID.
         if (actualStudentId) {
-          const attendanceQuery = query(
-            collection(db, "attendance"),
-            where("studentId", "==", actualStudentId),
+          attendanceQueries.push(
+            getDocs(
+              query(
+                collection(db, "attendance"),
+                where("studentId", "==", actualStudentId),
+              ),
+            ),
           );
+        }
 
-          const attendanceSnap = await getDocs(attendanceQuery);
+        const attendanceSnapshots = await Promise.all(attendanceQueries);
 
-          const records = attendanceSnap.docs
-            .map((item) => ({
+        const attendanceMap = new Map();
+
+        attendanceSnapshots.forEach((snapshot) => {
+          snapshot.docs.forEach((item) => {
+            attendanceMap.set(item.id, {
               id: item.id,
               ...item.data(),
-            }))
-            .sort((a, b) =>
-              String(a.date ?? "").localeCompare(String(b.date ?? "")),
-            );
+            });
+          });
+        });
 
-          if (active) {
-            setAttendanceRecords(records);
-          }
+        const attendance = [...attendanceMap.values()].sort((a, b) =>
+          String(a.date ?? "").localeCompare(String(b.date ?? "")),
+        );
+
+        if (active) {
+          setAttendanceRecords(attendance);
         }
 
-        // 5. TopLine Care monthly batch progress
-        if (isCare && studentData.batchId) {
-          const monthQuery = query(
-            collection(db, "batchMonthStates"),
-            where("batchId", "==", studentData.batchId),
-          );
-
-          const monthSnap = await getDocs(monthQuery);
-
-          if (active) {
-            const records = monthSnap.docs
-              .map((item) => ({
-                id: item.id,
-                ...item.data(),
-              }))
-              .filter(
-                (item) =>
-                  item.departmentId == null ||
-                  normalizeId(item.departmentId) === "3",
-              )
-              .sort(
-                (a, b) =>
-                  Number(a.monthNumber ?? 0) - Number(b.monthNumber ?? 0),
-              );
-
-            setMonthStates(records);
-          }
-        }
-
-        // 6. Exam results
-        // Results are optional; permission failure should not
-        // prevent the rest of the profile from rendering.
+        // Results
         if (actualStudentId) {
           try {
-            const resultsQuery = query(
-              collection(db, "results"),
-              where("studentId", "==", actualStudentId),
+            const resultsSnap = await getDocs(
+              query(
+                collection(db, "results"),
+                where("studentId", "==", actualStudentId),
+              ),
             );
-
-            const resultsSnap = await getDocs(resultsQuery);
 
             if (active) {
               setResults(
@@ -567,22 +464,15 @@ export default function StudentProfile() {
                 })),
               );
             }
-          } catch (resultError) {
-            console.warn("Results could not be loaded:", resultError);
-
-            if (active) {
-              setResults([]);
-            }
+          } catch (err) {
+            console.warn("Results loading error:", err);
           }
         }
       } catch (err) {
         console.error("Student profile error:", err);
 
         if (active) {
-          setError(
-            err?.message ||
-              "প্রোফাইল লোড করা যায়নি। Firebase Rules পরীক্ষা করুন।",
-          );
+          setError(err?.message || "প্রোফাইল লোড করা যায়নি।");
         }
       } finally {
         if (active) {
@@ -605,7 +495,6 @@ export default function StudentProfile() {
 
   const status = student ? getStatus(student) : null;
 
-  // Attendance summary
   const attendanceSummary = useMemo(() => {
     const present = attendanceRecords.filter(
       (record) => getAttendanceStatus(record) === "present",
@@ -618,66 +507,56 @@ export default function StudentProfile() {
     const total = present + absent;
 
     return {
-      total,
       present,
       absent,
+      total,
       percentage: total ? Math.round((present / total) * 100) : 0,
     };
   }, [attendanceRecords]);
 
-  // Academy dress code summary
   const dressCodeSummary = useMemo(() => {
     const records = attendanceRecords.filter(
       (record) => record.dressCode !== undefined && record.dressCode !== null,
     );
 
     const worn = records.filter(
-      (record) => getDressCodeStatus(record.dressCode) === "পরিহিত",
-    ).length;
-
-    const notWorn = records.filter(
-      (record) => getDressCodeStatus(record.dressCode) === "পরিহিত নয়",
+      (record) =>
+        record.dressCode === true ||
+        ["yes", "true", "পরিহিত", "হ্যাঁ"].includes(
+          String(record.dressCode).toLowerCase(),
+        ),
     ).length;
 
     return {
       total: records.length,
       worn,
-      notWorn,
+      notWorn: records.length - worn,
     };
   }, [attendanceRecords]);
 
-  // Loading state
+  // Loading
   if (loading) {
     return (
-      <main className="flex min-h-[60vh] items-center justify-center bg-slate-50 px-4 dark:bg-slate-950">
-        <div className="text-center">
-          <div className="mx-auto mb-4 h-10 w-10 animate-spin rounded-full border-4 border-slate-200 border-t-[#E74C3C] dark:border-slate-700" />
-
-          <p className="text-slate-600 dark:text-slate-300">
-            শিক্ষার্থীর প্রোফাইল লোড হচ্ছে...
-          </p>
-        </div>
+      <main className="grid min-h-[60vh] place-items-center bg-base-200">
+        <span className="loading loading-spinner loading-lg text-primary" />
       </main>
     );
   }
 
-  // Error or missing student
+  // Error
   if (error || !student) {
     return (
-      <main className="mx-auto min-h-[60vh] max-w-xl bg-slate-50 px-4 py-16 dark:bg-slate-950">
-        <div className="rounded-2xl border border-red-200 bg-white p-8 text-center shadow-sm dark:border-red-900 dark:bg-slate-900">
-          <h1 className="mb-3 text-xl font-bold text-red-600">
-            প্রোফাইল পাওয়া যায়নি
-          </h1>
+      <main className="grid min-h-[60vh] place-items-center bg-base-200 p-4">
+        <div className="w-full max-w-sm rounded-2xl bg-base-100 p-6 text-center shadow">
+          <FiShield className="mx-auto mb-3 text-3xl text-error" />
 
-          <p className="break-words text-slate-600 dark:text-slate-300">
+          <h2 className="font-bold">প্রোফাইল পাওয়া যায়নি</h2>
+
+          <p className="mt-2 text-sm text-base-content/60">
             {error || "শিক্ষার্থীর তথ্য পাওয়া যায়নি।"}
           </p>
 
-          <Link
-            to="/"
-            className="mt-6 inline-block rounded-lg bg-[#2C3E50] px-5 py-2.5 font-medium text-white hover:bg-[#1f2d3a]"
-          >
+          <Link to="/" className="btn btn-primary btn-sm mt-5">
             হোমে ফিরে যান
           </Link>
         </div>
@@ -685,53 +564,58 @@ export default function StudentProfile() {
     );
   }
 
-  const studentName = getStudentName(student);
+  const name = getStudentName(student);
 
-  const firstCharacter = String(studentName).trim().charAt(0) || "শ";
+  const StatusIcon = status.icon;
 
   return (
-    <main className="min-h-screen bg-slate-50 px-4 py-8 text-slate-800 dark:bg-slate-950 dark:text-slate-100 sm:px-6">
-      <div className="mx-auto max-w-5xl space-y-6">
+    <main className="min-h-screen bg-base-200 px-3 py-4 sm:px-5 sm:py-6">
+      <div className="mx-auto max-w-4xl space-y-3 sm:space-y-4">
         {/* Profile Header */}
-        <header className="overflow-hidden rounded-2xl bg-gradient-to-r from-[#2C3E50] to-[#34495E] text-white shadow-md">
-          <div className="p-6 sm:p-8">
-            <div className="flex flex-col gap-5 sm:flex-row sm:items-center">
-              <div className="flex h-20 w-20 shrink-0 items-center justify-center rounded-2xl bg-white/10 text-3xl font-bold">
-                {firstCharacter}
-              </div>
-
-              <div className="min-w-0 flex-1">
-                <p className="mb-1 text-sm text-slate-300">TOPLINE EDUCATION</p>
-
-                <h1 className="break-words text-2xl font-bold sm:text-3xl">
-                  {studentName}
-                </h1>
-
-                <p className="mt-2 text-slate-300">
-                  Student ID: {toBangla(student.studentId)}
-                </p>
-              </div>
-
-              <span
-                className={`w-fit rounded-full px-4 py-2 text-sm font-semibold ${status.className}`}
-              >
-                {status.label}
-              </span>
+        <header className="overflow-hidden rounded-2xl bg-gradient-to-r from-[#2C3E50] to-[#34495E] p-4 text-white shadow sm:p-5">
+          <div className="flex items-center gap-3 sm:gap-4">
+            <div className="grid h-14 w-14 shrink-0 place-items-center rounded-xl bg-white/10 text-2xl font-bold sm:h-16 sm:w-16">
+              {name.trim().charAt(0) || "শ"}
             </div>
+
+            <div className="min-w-0 flex-1">
+              <p className="text-[10px] tracking-wider text-white/60">
+                TOPLINE EDUCATION
+              </p>
+
+              <h1 className="mt-1 truncate text-lg font-extrabold sm:text-2xl">
+                {name}
+              </h1>
+
+              <p className="mt-1 text-xs text-white/70">
+                ID: {toBangla(student.studentId)}
+              </p>
+            </div>
+
+            <span
+              className={`flex shrink-0 items-center gap-1 rounded-full px-2.5 py-1.5 text-[10px] font-bold sm:text-xs ${status.className}`}
+            >
+              <StatusIcon size={13} />
+              <span className="hidden xs:inline">{status.label}</span>
+              <span className="xs:hidden">
+                {student.approved === true ? "সক্রিয়" : "অপেক্ষমাণ"}
+              </span>
+            </span>
           </div>
         </header>
 
         {/* Personal Information */}
-        <Section title="ব্যক্তিগত তথ্য">
-          <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
-            <InfoItem label="পূর্ণ নাম" value={studentName} />
-
-            <InfoItem label="Student ID" value={toBangla(student.studentId)} />
-
-            <InfoItem label="মোবাইল নম্বর" value={toBangla(student.phone)} />
+        <Section title="ব্যক্তিগত তথ্য" icon={FiUser}>
+          <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
+            <InfoItem
+              icon={FiPhone}
+              label="মোবাইল"
+              value={toBangla(student.phone)}
+            />
 
             <InfoItem
-              label="লিঙ্গ"
+              icon={FiUser}
+              label="আপনি"
               value={
                 student.gender === "male"
                   ? "ছেলে"
@@ -741,144 +625,121 @@ export default function StudentProfile() {
               }
             />
 
-            <InfoItem label="গ্রাম" value={student.villageName} />
+            <InfoItem
+              icon={FiMapPin}
+              label="গ্রাম"
+              value={student.villageName}
+            />
 
             <InfoItem
-              label="ভর্তি তারিখ"
+              icon={FiCalendar}
+              label="ভর্তির তারিখ"
               value={banglaDate(student.createdAt)}
             />
-          </div>
-        </Section>
-        {String(student?.departmentId) === "3" && (
-          <div className="mt-6">
-            <MonthlyProgress student={student} />
-          </div>
-        )}
 
-        {/* Academic Information */}
-        <Section title="শিক্ষাগত তথ্য">
-          <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
             <InfoItem
+              icon={FiUsers}
               label="বিভাগ"
-              value={student.departmentName || department?.name}
+              value={student.departmentName}
             />
 
             <InfoItem
+              icon={FiBookOpen}
               label={isCare ? "ব্যাচ" : "শ্রেণি"}
-              value={
-                isCare
-                  ? student.batchName ||
-                    classOrBatch?.className ||
-                    classOrBatch?.name
-                  : student.className ||
-                    classOrBatch?.className ||
-                    classOrBatch?.name
-              }
+              value={isCare ? student.batchName : student.className}
             />
-
-            <InfoItem label="ভর্তি অবস্থা" value={status.label} />
           </div>
         </Section>
 
-        {/* Academy Dress Code */}
-        {isAcademy && (
-          <Section title="স্কুল ড্রেসকোড">
-            <div className="grid gap-4 sm:grid-cols-3">
-              <InfoItem
-                label="ড্রেসকোড রেকর্ড"
-                value={toBangla(dressCodeSummary.total)}
-              />
-
-              <InfoItem
-                label="ড্রেস পরিহিত"
-                value={toBangla(dressCodeSummary.worn)}
-              />
-
-              <InfoItem
-                label="ড্রেস পরিহিত নয়"
-                value={toBangla(dressCodeSummary.notWorn)}
-              />
-            </div>
-
-            <p className="mt-4 text-sm text-slate-500 dark:text-slate-400">
-              ড্রেসকোডের হিসাব উপস্থিতির রেকর্ডে সংরক্ষিত{" "}
-              <code className="mx-1 rounded bg-slate-100 px-1.5 py-0.5 dark:bg-slate-800">
-                dressCode
-              </code>{" "}
-              ফিল্ড থেকে দেখানো হচ্ছে।
-            </p>
+        {/* Care Progress */}
+        {isCare && (
+          <Section title="ব্যাচের অগ্রগতি" icon={FiAward}>
+            <MonthlyProgress student={student} />
           </Section>
         )}
 
-        {/* Attendance Calendar */}
-        <Section title="উপস্থিতি ক্যালেন্ডার">
-          <div className="mb-5 grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
-            <InfoItem
-              label="মোট ক্লাসের রেকর্ড"
-              value={toBangla(attendanceSummary.total)}
-            />
+        {/* Academy Dress Code */}
+        {isAcademy && (
+          <Section title="স্কুল ড্রেসকোড" icon={FiShield}>
+            <div className="grid grid-cols-3 gap-2">
+              {[
+                ["মোট", dressCodeSummary.total, "text-base-content"],
+                ["পরিহিত", dressCodeSummary.worn, "text-success"],
+                ["পরিহিত নয়", dressCodeSummary.notWorn, "text-error"],
+              ].map(([label, value, color]) => (
+                <div
+                  key={label}
+                  className="rounded-lg bg-base-200 p-3 text-center"
+                >
+                  <p className="text-[10px] text-base-content/50">{label}</p>
 
-            <InfoItem
-              label="উপস্থিত"
-              value={toBangla(attendanceSummary.present)}
-            />
+                  <p className={`mt-1 text-xl font-bold ${color}`}>
+                    {toBangla(value)}
+                  </p>
+                </div>
+              ))}
+            </div>
+          </Section>
+        )}
 
-            <InfoItem
-              label="অনুপস্থিত"
-              value={toBangla(attendanceSummary.absent)}
-            />
+        {/* Attendance */}
+        <Section title="উপস্থিতির বিবরণ" icon={FiCalendar}>
+          <div className="mb-3 grid grid-cols-3 gap-2">
+            {[
+              ["মোট", attendanceSummary.total, "text-base-content"],
+              ["উপস্থিত", attendanceSummary.present, "text-success"],
+              ["অনুপস্থিত", attendanceSummary.absent, "text-error"],
+            ].map(([label, value, color]) => (
+              <div
+                key={label}
+                className="rounded-lg bg-base-200 p-2.5 text-center"
+              >
+                <p className="text-[10px] text-base-content/50">{label}</p>
 
-            <InfoItem
-              label="উপস্থিতির হার"
-              value={`${toBangla(attendanceSummary.percentage)}%`}
-            />
+                <p className={`text-lg font-extrabold ${color}`}>
+                  {toBangla(value)}
+                </p>
+              </div>
+            ))}
           </div>
 
           <AttendanceCalendar records={attendanceRecords} />
         </Section>
 
-        {/* Exam Results */}
-        <Section title="পরীক্ষার ফলাফল">
-          {results.length > 0 ? (
-            <div className="overflow-x-auto">
-              <table className="w-full min-w-[500px] text-left text-sm">
-                <thead>
-                  <tr className="border-b border-slate-200 bg-slate-50 text-slate-600 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-300">
-                    <th className="px-4 py-3 font-semibold">পরীক্ষা</th>
+        {/* Results */}
+        <Section title="পরীক্ষার ফলাফল" icon={FiAward}>
+          {results.length ? (
+            <div className="space-y-2">
+              {results.map((result) => (
+                <div
+                  key={result.id}
+                  className="flex items-center justify-between gap-3 rounded-lg bg-base-200 p-3"
+                >
+                  <div className="min-w-0">
+                    <p className="truncate text-sm font-bold">
+                      {result.examName || "পরীক্ষা"}
+                    </p>
 
-                    <th className="px-4 py-3 font-semibold">বিষয়</th>
+                    <p className="mt-1 truncate text-xs text-base-content/60">
+                      {result.subjectName || result.subject || "বিষয়"}
+                    </p>
+                  </div>
 
-                    <th className="px-4 py-3 font-semibold">প্রাপ্ত নম্বর</th>
+                  <div className="shrink-0 text-right">
+                    <p className="text-lg font-extrabold text-primary">
+                      {toBangla(result.marks ?? "—")}
+                    </p>
 
-                    <th className="px-4 py-3 font-semibold">পূর্ণমান</th>
-                  </tr>
-                </thead>
-
-                <tbody>
-                  {results.map((result) => (
-                    <tr
-                      key={result.id}
-                      className="border-b border-slate-100 last:border-0 dark:border-slate-800"
-                    >
-                      <td className="px-4 py-3">{result.examName || "—"}</td>
-
-                      <td className="px-4 py-3">
-                        {result.subjectName || result.subject || "—"}
-                      </td>
-
-                      <td className="px-4 py-3 font-semibold">
-                        {result.marks ?? "—"}
-                      </td>
-
-                      <td className="px-4 py-3">{result.totalMarks ?? "—"}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
+                    <p className="text-[10px] text-base-content/50">
+                      পূর্ণমান: {toBangla(result.totalMarks ?? "—")}
+                    </p>
+                  </div>
+                </div>
+              ))}
             </div>
           ) : (
-            <p className="text-sm text-slate-500 dark:text-slate-400">
-              এখনো পরীক্ষার ফলাফল প্রকাশ করা হয়নি।
+            <p className="rounded-lg bg-base-200 p-4 text-center text-xs text-base-content/60">
+              এখনো কোনো পরীক্ষার ফলাফল প্রকাশ করা হয়নি।
             </p>
           )}
         </Section>
