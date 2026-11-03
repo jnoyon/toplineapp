@@ -42,23 +42,56 @@ const getStudentClass = (student) =>
   normalize(student?.batchId || student?.classId);
 
 const getStudentName = (item) =>
-  item.studentName || item.name || "নাম পাওয়া যায়নি";
+  item.studentName || item.name || "নাম পাওয়া যায়নি";
 
+/**
+ * তালিকার প্রথম যে ফিল্ডে বৈধ সংখ্যা আছে, সেটির মান ফেরত দেয়।
+ * ফাঁকা স্ট্রিং বা সংখ্যা নয় এমন মান বাদ যায়।
+ */
+const firstNumber = (...values) => {
+  for (const value of values) {
+    if (value === undefined || value === null || value === "") continue;
+
+    const number = Number(value);
+
+    if (Number.isFinite(number)) return number;
+  }
+
+  return null;
+};
+
+// প্রাপ্ত নম্বর
+// অনলাইন পরীক্ষার ফলাফলে `marks` সংরক্ষিত হয়;
+// অফলাইন পরীক্ষার নম্বরের জন্য আগের ফিল্ডগুলোও রাখা হয়েছে।
 const getScore = (result) =>
-  result.obtainedMark ??
-  result.score ??
-  result.totalObtainedMark ??
-  result.marksObtained ??
-  result.correctCount ??
-  0;
+  firstNumber(
+    result.obtainedMark,
+    result.score,
+    result.totalObtainedMark,
+    result.marksObtained,
+    result.marks,
+    result.correctCount,
+    result.correctAnswers,
+  ) ?? 0;
 
+// পূর্ণমান
+// অনলাইন পরীক্ষার ফলাফলে `totalMarks` ও `fullMarks` সংরক্ষিত হয়।
 const getTotal = (result) =>
-  result.totalMark ??
-  result.totalMarks ??
-  result.maxMark ??
-  result.fullMark ??
-  result.questionsCount ??
-  0;
+  firstNumber(
+    result.totalMark,
+    result.totalMarks,
+    result.maxMark,
+    result.fullMark,
+    result.fullMarks,
+    result.questionsCount,
+    result.totalQuestions,
+  ) ?? 0;
+
+// দশমিকের পর সর্বোচ্চ ২ ঘর দেখায় (যেমন 3.33, 5)
+const formatNumber = (value) =>
+  Number.isInteger(value)
+    ? String(value)
+    : String(Math.round(value * 100) / 100);
 
 const getPercentage = (obtained, total) =>
   Number(total) > 0
@@ -106,13 +139,13 @@ export default function StudentExamResults() {
         const snapshot = await getDoc(doc(db, "students", session.documentId));
 
         if (!snapshot.exists()) {
-          throw new Error("শিক্ষার্থীর প্রোফাইল পাওয়া যায়নি।");
+          throw new Error("শিক্ষার্থীর প্রোফাইল পাওয়া যায়নি।");
         }
 
         const data = { ...snapshot.data(), documentId: snapshot.id };
 
         if (data.isActive === false || data.approved === false) {
-          throw new Error("আপনার অ্যাকাউন্ট সক্রিয় নয়।");
+          throw new Error("আপনার অ্যাকাউন্ট সক্রিয় নয়।");
         }
 
         if (!mounted) return;
@@ -145,7 +178,7 @@ export default function StudentExamResults() {
         if (mounted) setStudents(classmates);
       } catch (error) {
         console.error("Student results profile error:", error);
-        if (mounted) toast.error(error.message || "তথ্য লোড করা যায়নি।");
+        if (mounted) toast.error(error.message || "তথ্য লোড করা যায়নি।");
       } finally {
         if (mounted) setLoading(false);
       }
@@ -203,7 +236,7 @@ export default function StudentExamResults() {
         if (mounted) setExams(list);
       } catch (error) {
         console.error("Load exam list error:", error);
-        toast.error("পরীক্ষার তালিকা লোড করা যায়নি।");
+        toast.error("পরীক্ষার তালিকা লোড করা যায়নি।");
       }
     }
 
@@ -301,16 +334,13 @@ export default function StudentExamResults() {
                 sameId(result.studentUid, ownStudentId),
             };
           })
-          .sort((a, b) => {
-            if (a.isOwn) return -1;
-            if (b.isOwn) return 1;
-            return getScore(b) - getScore(a);
-          });
+          // নম্বর অনুযায়ী বেশি থেকে কম ক্রমে সাজানো হবে।
+          .sort((a, b) => getScore(b) - getScore(a));
 
         if (mounted) setResults(list);
       } catch (error) {
         console.error("Load exam results error:", error);
-        toast.error("ফলাফল লোড করা যায়নি।");
+        toast.error("ফলাফল লোড করা যায়নি।");
       } finally {
         if (mounted) setResultLoading(false);
       }
@@ -346,9 +376,9 @@ export default function StudentExamResults() {
     return (
       <div className="mx-auto max-w-lg p-6">
         <div className="rounded-2xl border border-base-300 bg-base-100 p-8 text-center">
-          <h2 className="text-xl font-bold">লগইন প্রয়োজন</h2>
+          <h2 className="text-xl font-bold">লগইন প্রয়োজন</h2>
           <p className="mt-2 text-sm text-base-content/60">
-            ফলাফল দেখতে শিক্ষার্থী অ্যাকাউন্ট দিয়ে লগইন করুন।
+            ফলাফল দেখতে শিক্ষার্থী অ্যাকাউন্ট দিয়ে লগইন করুন।
           </p>
         </div>
       </div>
@@ -399,7 +429,7 @@ export default function StudentExamResults() {
                 ? "আগে পরীক্ষার ধরন নির্বাচন করুন"
                 : exams.length
                   ? "পরীক্ষা নির্বাচন করুন"
-                  : "কোনো পরীক্ষা পাওয়া যায়নি"}
+                  : "কোনো পরীক্ষা পাওয়া যায়নি"}
             </option>
 
             {exams.map((exam) => (
@@ -452,7 +482,11 @@ export default function StudentExamResults() {
                   <p className="text-sm text-base-content/60">প্রাপ্ত নম্বর</p>
                   <p className="mt-1 text-2xl font-extrabold text-primary">
                     {myResult
-                      ? `${getScore(myResult)} / ${getTotal(myResult) || "—"}`
+                      ? `${formatNumber(getScore(myResult))} / ${
+                          getTotal(myResult)
+                            ? formatNumber(getTotal(myResult))
+                            : "—"
+                        }`
                       : "—"}
                   </p>
                 </div>
@@ -484,10 +518,10 @@ export default function StudentExamResults() {
 
                 {results.length === 0 ? (
                   <div className="p-10 text-center">
-                    <p className="font-semibold">ফলাফল পাওয়া যায়নি</p>
+                    <p className="font-semibold">ফলাফল পাওয়া যায়নি</p>
                     <p className="mt-2 text-sm text-base-content/60">
-                      এই পরীক্ষার নম্বর এখনো প্রকাশ করা হয়নি অথবা কোনো ফলাফল জমা
-                      হয়নি।
+                      এই পরীক্ষার নম্বর এখনো প্রকাশ করা হয়নি অথবা কোনো ফলাফল
+                      জমা হয়নি।
                     </p>
                   </div>
                 ) : (
@@ -497,9 +531,8 @@ export default function StudentExamResults() {
                         <tr>
                           <th>অবস্থান</th>
                           <th>শিক্ষার্থী</th>
-                          <th>আইডি</th>
                           <th>প্রাপ্ত নম্বর</th>
-                          <th>শতকরা</th>
+                          <th>সময়</th>
                         </tr>
                       </thead>
 
@@ -533,24 +566,20 @@ export default function StudentExamResults() {
                               </div>
                             </td>
 
-                            <td>{result.studentId || "—"}</td>
-
                             <td>
                               <span className="font-bold">
-                                {getScore(result)}
+                                {formatNumber(getScore(result))}
                               </span>
                               <span className="text-base-content/50">
                                 {" "}
-                                / {getTotal(result) || "—"}
+                                /{" "}
+                                {getTotal(result)
+                                  ? formatNumber(getTotal(result))
+                                  : "—"}
                               </span>
                             </td>
 
-                            <td>
-                              {getPercentage(
-                                getScore(result),
-                                getTotal(result),
-                              )}
-                            </td>
+                            <td>{result.timeNeededSeconds} সেকেন্ড </td>
                           </tr>
                         ))}
                       </tbody>

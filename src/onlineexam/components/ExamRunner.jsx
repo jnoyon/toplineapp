@@ -11,6 +11,7 @@ import Swal from "sweetalert2";
 import { AnimatePresence, motion } from "framer-motion";
 
 import { db } from "../../assets/firebase/firebase.init";
+import { calculateCurrentMark } from "../../utils/calculateCurrentMark";
 import { formatCountdown, toDate } from "../examUtils";
 
 /* =========================================================
@@ -20,14 +21,12 @@ import { formatCountdown, toDate } from "../examUtils";
 function getQuestions(exam) {
   if (Array.isArray(exam?.questions)) return exam.questions;
   if (Array.isArray(exam?.questionList)) return exam.questionList;
-
   return [];
 }
 
 function getOptions(question) {
   if (Array.isArray(question?.options)) return question.options;
   if (Array.isArray(question?.choices)) return question.choices;
-
   return [];
 }
 
@@ -55,7 +54,7 @@ function getQuestionText(question) {
     question?.text ||
     question?.title ||
     question?.desc ||
-    "প্রশ্নের বিবরণ পাওয়া যায়নি"
+    "প্রশ্নের বিবরণ পাওয়া যায়নি"
   );
 }
 
@@ -107,7 +106,7 @@ function createSeededRandom(seed) {
 
 function shuffleWithSeed(items, seedText) {
   const shuffled = [...items];
-  const random = createSeededRandom(hashString(seedText));
+  const random = createSeededRandom(hashString(String(seedText)));
 
   for (let index = shuffled.length - 1; index > 0; index -= 1) {
     const randomIndex = Math.floor(random() * (index + 1));
@@ -131,6 +130,8 @@ function normalizeStoredIndex(value) {
   return Number.isInteger(index) && index >= 0 ? index : null;
 }
 
+const round2 = (value) => Math.round(value * 100) / 100;
+
 /* =========================================================
    Main Component
 ========================================================= */
@@ -147,19 +148,49 @@ const ExamRunner = ({
   const attemptId = attempt?.id;
   const examId = exam?.id;
 
+  /*
+   * প্রতিটি নতুন Attempt-এর জন্য আলাদা Seed।
+   * Refresh করলে একই Seed ব্যবহার হবে।
+   * Retake শুরু করলে OnlineExamList থেকে নতুন Seed আসবে।
+   */
+  const randomizationSeed =
+    attempt?.randomizationSeed ||
+    toDate(attempt?.startedAt)?.getTime() ||
+    attemptId ||
+    examId ||
+    "exam";
+
   /* -------------------------------------------------------
-     Stable question order
+     Random question selection
   ------------------------------------------------------- */
 
   const shuffledQuestionIndexes = useMemo(() => {
+    const requestedCount = Number(exam?.questionCount);
+
+    const selectedCount =
+      Number.isInteger(requestedCount) && requestedCount > 0
+        ? Math.min(requestedCount, questions.length)
+        : questions.length;
+
     return shuffleWithSeed(
       questions.map((_, index) => index),
-      `${attemptId || examId || "exam"}:question-order`,
-    );
-  }, [questions, attemptId, examId]);
+      `${randomizationSeed}:question-order`,
+    ).slice(0, selectedCount);
+  }, [questions, randomizationSeed, exam?.questionCount]);
+
+  const totalQuestions = shuffledQuestionIndexes.length;
 
   /* -------------------------------------------------------
-     Stable option order
+     Marks
+  ------------------------------------------------------- */
+
+  const fullMarks =
+    Number(exam?.fullMarks) > 0 ? Number(exam.fullMarks) : totalQuestions;
+
+  const marksPerQuestion = totalQuestions > 0 ? fullMarks / totalQuestions : 0;
+
+  /* -------------------------------------------------------
+     Random option order
   ------------------------------------------------------- */
 
   const shuffledOptionIndexes = useMemo(() => {
@@ -168,12 +199,12 @@ const ExamRunner = ({
     questions.forEach((question, questionIndex) => {
       result[questionIndex] = shuffleWithSeed(
         getOptions(question).map((_, optionIndex) => optionIndex),
-        `${attemptId || examId || "exam"}:question:${questionIndex}:options`,
+        `${randomizationSeed}:question:${questionIndex}:options`,
       );
     });
 
     return result;
-  }, [questions, attemptId, examId]);
+  }, [questions, randomizationSeed]);
 
   /* -------------------------------------------------------
      State
@@ -186,7 +217,7 @@ const ExamRunner = ({
 
     if (!Number.isInteger(savedIndex) || savedIndex < 0) return 0;
 
-    return Math.min(savedIndex, questions.length);
+    return Math.min(savedIndex, totalQuestions);
   });
 
   const [now, setNow] = useState(Date.now());
@@ -216,7 +247,6 @@ const ExamRunner = ({
 
   const remainingMs = deadline ? Math.max(0, deadline.getTime() - now) : 0;
 
-  const totalQuestions = questions.length;
   const isFinished = currentQuestionIndex >= totalQuestions;
 
   const studentId = String(student?.studentId ?? attempt?.studentId ?? "");
@@ -287,7 +317,6 @@ const ExamRunner = ({
   const advanceQuestion = useCallback(
     async (expectedIndex) => {
       if (submittingRef.current || advancingRef.current) return;
-
       if (currentIndexRef.current !== expectedIndex) return;
 
       advancingRef.current = true;
@@ -326,7 +355,6 @@ const ExamRunner = ({
         [questionIndex]: optionIndex,
       };
 
-      // Update UI immediately.
       answersRef.current = nextAnswers;
       setAnswers(nextAnswers);
       setSaveError("");
@@ -413,17 +441,18 @@ const ExamRunner = ({
 
       try {
         if (!studentId) {
-          throw new Error("শিক্ষার্থীর পরিচয় পাওয়া যায়নি।");
+          throw new Error("শিক্ষার্থীর পরিচয় পাওয়া যায়নি।");
         }
 
         if (!attemptId) {
-          throw new Error("পরীক্ষার attempt পাওয়া যায়নি।");
+          throw new Error("পরীক্ষার attempt পাওয়া যায়নি।");
         }
 
         const selectedAnswers = answersRef.current || {};
 
-        const review = questions.map((question, index) => {
-          const rawAnswer = selectedAnswers[index];
+        const review = shuffledQuestionIndexes.map((originalIndex) => {
+          const question = questions[originalIndex];
+          const rawAnswer = selectedAnswers[originalIndex];
 
           const selectedAnswer =
             rawAnswer === undefined || rawAnswer === null || rawAnswer === ""
@@ -439,6 +468,7 @@ const ExamRunner = ({
             selectedAnswer === correctAnswer;
 
           return {
+            sourceIndex: originalIndex,
             question: getQuestionText(question),
             options: [...options],
             correctAnswer,
@@ -449,6 +479,16 @@ const ExamRunner = ({
         });
 
         const correctAnswers = review.filter((item) => item.isCorrect).length;
+
+        const marks = round2(correctAnswers * marksPerQuestion);
+
+        const examAnswers = {};
+
+        shuffledQuestionIndexes.forEach((originalIndex) => {
+          if (selectedAnswers[originalIndex] !== undefined) {
+            examAnswers[originalIndex] = selectedAnswers[originalIndex];
+          }
+        });
 
         const effectiveEnd = Math.min(
           Date.now(),
@@ -502,41 +542,62 @@ const ExamRunner = ({
             (item) => item.selectedAnswer === null,
           ).length,
 
-          marks: correctAnswers,
-          totalMarks: totalQuestions,
+          marks,
+          totalMarks: fullMarks,
+          fullMarks,
+          marksPerQuestion: round2(marksPerQuestion),
 
-          percentage:
-            totalQuestions > 0 ? (correctAnswers / totalQuestions) * 100 : 0,
+          percentage: fullMarks > 0 ? (marks / fullMarks) * 100 : 0,
 
-          answers: selectedAnswers,
+          answers: examAnswers,
           review,
           timeNeededSeconds,
           submitReason: reason,
+
+          // Attempt information
+          attemptId,
+          attemptNumber: Number(attempt?.attemptNumber || 1),
+          isRetake: Boolean(attempt?.isRetake),
+
           submittedAt: serverTimestamp(),
         };
 
         const batch = writeBatch(db);
 
+        // একই attemptId ব্যবহার করায় আগের ফলাফল Replace হবে।
         batch.set(doc(db, "examResults", attemptId), resultData);
 
         batch.delete(doc(db, "examAttempts", attemptId));
 
         await batch.commit();
 
+        const markUpdate = calculateCurrentMark({
+          db,
+          studentDocumentId: String(resultData.studentDocumentId || ""),
+          studentId,
+        }).catch((error) => {
+          console.error("currentMark update failed:", error);
+        });
+
         await Swal.fire({
           icon: "success",
-          title: "পরীক্ষা জমা হয়েছে",
+          title: "পরীক্ষা জমা হয়েছে",
           html: `
             <div style="font-size:16px;line-height:2">
               <div>প্রাপ্ত নম্বর</div>
               <div style="font-size:32px;font-weight:800">
-                ${correctAnswers} / ${totalQuestions}
+                ${marks} / ${fullMarks}
+              </div>
+              <div style="font-size:14px;opacity:.7">
+                সঠিক উত্তর: ${correctAnswers} / ${totalQuestions}
               </div>
             </div>
           `,
           confirmButtonText: "ফলাফল দেখুন",
           confirmButtonColor: "#4f46e5",
         });
+
+        await markUpdate;
 
         onSubmitted?.({
           ...resultData,
@@ -550,7 +611,7 @@ const ExamRunner = ({
           error?.code === "permission-denied"
             ? "ফলাফল সংরক্ষণের অনুমতি নেই। Firebase Security Rules পরীক্ষা করো।"
             : error?.message ||
-                "পরীক্ষা জমা দেওয়া যায়নি। ইন্টারনেট সংযোগ পরীক্ষা করে আবার চেষ্টা করো।",
+                "পরীক্ষা জমা দেওয়া যায়নি। ইন্টারনেট সংযোগ পরীক্ষা করে আবার চেষ্টা করো।",
         );
 
         submittingRef.current = false;
@@ -563,12 +624,15 @@ const ExamRunner = ({
       attempt,
       attemptId,
       questions,
+      shuffledQuestionIndexes,
       exam,
       examId,
       deadline,
       startedAt,
       departmentName,
       totalQuestions,
+      fullMarks,
+      marksPerQuestion,
       onSubmitted,
       clearAnswerTimer,
     ],
@@ -613,10 +677,10 @@ const ExamRunner = ({
       const choice = await Swal.fire({
         icon: "warning",
         title: "পরীক্ষা থেকে বের হতে চাও?",
-        text: "ফিরে গেলে পরীক্ষা জমা হয়ে যাবে।",
+        text: "ফিরে গেলে পরীক্ষা জমা হয়ে যাবে।",
         showCancelButton: true,
-        confirmButtonText: "জমা দিয়ে বের হব",
-        cancelButtonText: "পরীক্ষা চালিয়ে যাব",
+        confirmButtonText: "জমা দিয়ে বের হব",
+        cancelButtonText: "পরীক্ষা চালিয়ে যাব",
         reverseButtons: true,
         allowOutsideClick: false,
       });
@@ -668,11 +732,11 @@ const ExamRunner = ({
           <div className="mb-4 text-5xl">📭</div>
 
           <h2 className="text-xl font-extrabold">
-            পরীক্ষার প্রশ্ন পাওয়া যায়নি
+            পরীক্ষার প্রশ্ন পাওয়া যায়নি
           </h2>
 
           <p className="mt-3 text-sm leading-7 text-base-content/60">
-            পরীক্ষার ডেটায় questions অথবা questionList আছে কি না যাচাই করো।
+            পরীক্ষার ডেটায় questions অথবা questionList আছে কি না যাচাই করো।
           </p>
         </section>
       </main>
@@ -685,18 +749,29 @@ const ExamRunner = ({
 
   return (
     <main className="mx-auto min-h-screen max-w-3xl px-3 pb-6 pt-3 sm:px-5 sm:pt-5">
-      {/* Sticky exam header */}
       <header className="sticky top-0 z-30 mb-4 rounded-2xl border border-base-300 bg-base-100/95 p-3 shadow-sm backdrop-blur-xl sm:mb-6 sm:p-5">
         <div className="flex items-center justify-between gap-3">
           <div className="min-w-0 flex-1">
-            <h1 className="truncate text-base font-extrabold sm:text-xl">
-              {exam.title || exam.name || "অনলাইন পরীক্ষা"}
-            </h1>
+            {!isFinished && (
+              <div className="mt-3">
+                <div className="mb-2 flex items-center justify-between text-xs">
+                  <span className="font-semibold text-base-content/70">
+                    {exam.title} (প্রশ্ন {currentQuestionIndex + 1} /{" "}
+                    {totalQuestions})
+                  </span>
 
-            <p className="mt-1 truncate text-xs text-base-content/55 sm:text-sm">
-              {exam.subjectName || exam.subject || "অনলাইন পরীক্ষা"}
-              {departmentName ? ` · ${departmentName}` : ""}
-            </p>
+                  <span className="font-medium text-base-content/50">
+                    {Math.round(progressPercent)}%
+                  </span>
+                </div>
+
+                <progress
+                  className="progress progress-primary h-1.5 w-full"
+                  value={progressPercent}
+                  max={100}
+                />
+              </div>
+            )}
           </div>
 
           <div
@@ -707,7 +782,7 @@ const ExamRunner = ({
             }`}
           >
             <p className="text-[10px] font-semibold opacity-70 sm:text-xs">
-              বাকি সময়
+              বাকি সময়
             </p>
 
             <p className="font-mono text-lg font-extrabold tabular-nums sm:text-xl">
@@ -715,29 +790,8 @@ const ExamRunner = ({
             </p>
           </div>
         </div>
-
-        {!isFinished && (
-          <div className="mt-3">
-            <div className="mb-2 flex items-center justify-between text-xs">
-              <span className="font-semibold text-base-content/70">
-                প্রশ্ন {currentQuestionIndex + 1} / {totalQuestions}
-              </span>
-
-              <span className="font-medium text-base-content/50">
-                {Math.round(progressPercent)}%
-              </span>
-            </div>
-
-            <progress
-              className="progress progress-primary h-1.5 w-full"
-              value={progressPercent}
-              max={100}
-            />
-          </div>
-        )}
       </header>
 
-      {/* Save error */}
       <AnimatePresence>
         {saveError && (
           <motion.div
@@ -754,7 +808,6 @@ const ExamRunner = ({
         )}
       </AnimatePresence>
 
-      {/* Current question */}
       {!isFinished && currentQuestion && (
         <>
           <AnimatePresence mode="wait">
@@ -766,7 +819,6 @@ const ExamRunner = ({
               transition={{ duration: 0.18 }}
               className="overflow-hidden rounded-2xl border border-base-300 bg-base-100 shadow-sm sm:rounded-3xl"
             >
-              {/* Question */}
               <div className="border-b border-base-300 bg-base-200/30 p-4 sm:p-6">
                 <h2 className="whitespace-pre-wrap text-base font-bold leading-8 sm:text-xl sm:leading-9">
                   {getQuestionText(currentQuestion)}
@@ -782,7 +834,6 @@ const ExamRunner = ({
                 )}
               </div>
 
-              {/* Options */}
               <div className="space-y-3 p-3 sm:p-5">
                 {(shuffledOptionIndexes[originalQuestionIndex] || []).map(
                   (optionIndex, displayIndex) => {
@@ -837,7 +888,6 @@ const ExamRunner = ({
                 )}
               </div>
 
-              {/* Selection status */}
               <div className="px-3 pb-3 sm:px-5 sm:pb-5">
                 <div className="flex min-h-10 items-center gap-2 rounded-xl bg-base-200/50 px-3 py-2 text-xs text-base-content/55 sm:text-sm">
                   {savingAnswer ? (
@@ -851,20 +901,16 @@ const ExamRunner = ({
                       <span className="text-success" aria-hidden="true">
                         ✓
                       </span>
-                      উত্তর নির্বাচিত হয়েছে
+                      উত্তর নির্বাচিত হয়েছে
                     </>
                   ) : (
-                    <>
-                      <span aria-hidden="true">👆</span>
-                      একটি উত্তর নির্বাচন করো
-                    </>
+                    <>একটি উত্তর নির্বাচন করো</>
                   )}
                 </div>
               </div>
             </motion.section>
           </AnimatePresence>
 
-          {/* Navigation */}
           <div className="mt-4 flex items-center justify-between gap-3">
             <button
               type="button"
@@ -877,14 +923,13 @@ const ExamRunner = ({
 
             <p className="text-right text-[11px] leading-5 text-base-content/45 sm:text-xs">
               {selectedOption !== null && selectedOption !== undefined
-                ? "পরের প্রশ্ন স্বয়ংক্রিয়ভাবে আসবে"
+                ? "পরের প্রশ্ন স্বয়ংক্রিয়ভাবে আসবে"
                 : "উত্তর না জানলে Skip করো"}
             </p>
           </div>
         </>
       )}
 
-      {/* After the final question, show only the submit button. */}
       {isFinished && (
         <motion.section
           initial={{ opacity: 0, y: 10 }}
@@ -899,7 +944,7 @@ const ExamRunner = ({
               const choice = await Swal.fire({
                 icon: "question",
                 title: "পরীক্ষা জমা দেবে?",
-                text: "জমা দেওয়ার পর আর উত্তর পরিবর্তন করা যাবে না।",
+                text: "জমা দেওয়ার পর তোমার ফলাফল দেখতে পারবে",
                 showCancelButton: true,
                 confirmButtonText: "হ্যাঁ, জমা দাও",
                 cancelButtonText: "ফিরে যাই",

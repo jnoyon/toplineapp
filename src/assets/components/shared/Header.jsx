@@ -398,7 +398,7 @@ export default function Header({ user = null, onMenuClick, onProfileClick }) {
   };
 
   return (
-    <header className="sticky top-0 z-40 border-b border-slate-200 bg-white/95 text-slate-800 shadow-sm backdrop-blur-md transition-colors dark:border-slate-800 dark:bg-slate-950/95 dark:text-slate-100">
+    <header className="border-b border-slate-200 bg-white/95 text-slate-800 shadow-sm backdrop-blur-md transition-colors dark:border-slate-800 dark:bg-slate-950/95 dark:text-slate-100">
       <div className="mx-auto flex h-16 max-w-7xl items-center justify-between gap-2 px-3 sm:px-5">
         {/* Brand */}
 
@@ -496,7 +496,7 @@ export default function Header({ user = null, onMenuClick, onProfileClick }) {
               </button>
 
               {userMenuOpen && (
-                <div className="absolute right-0 top-12 z-50 w-64 overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-2xl dark:border-slate-700 dark:bg-slate-900">
+                <div className="absolute  right-0 top-12 z-50 w-64 overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-2xl dark:border-slate-700 dark:bg-slate-900">
                   <div className="border-b border-slate-100 px-4 py-4 dark:border-slate-800">
                     <p className="truncate text-sm font-black text-slate-800 dark:text-white">
                       {displayName}

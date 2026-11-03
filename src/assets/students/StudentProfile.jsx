@@ -21,9 +21,12 @@ import {
   FiAward,
   FiClock,
   FiUsers,
+  FiMonitor,
+  FiEdit3,
 } from "react-icons/fi";
 
 import { db } from "../firebase/firebase.init";
+import { getStudentAttendance } from "../../utils/attendanceRecords";
 import MonthlyProgress from "./MonthlyProgress";
 
 // ==================================================
@@ -111,9 +114,124 @@ function getStatus(student) {
   }
 
   return {
-    label: "অনুমোদনের অপেক্ষায়",
+    label: "অনুমোদনের অপেক্ষায়",
     icon: FiClock,
     className: "bg-amber-500/10 text-amber-600",
+  };
+}
+
+// ---------- ফলাফলের সাহায্যকারী ফাংশন ----------
+
+/**
+ * একাধিক ফিল্ড দিয়ে একটি collection খুঁজে ফলাফল একত্র করে
+ * (একই document দুইবার এলে একবারই থাকবে)।
+ */
+async function fetchByFields(collectionName, fields) {
+  const validFields = fields.filter(
+    ([, value]) => value !== undefined && value !== null && value !== "",
+  );
+
+  const snapshots = await Promise.all(
+    validFields.map(([field, value]) =>
+      getDocs(query(collection(db, collectionName), where(field, "==", value))),
+    ),
+  );
+
+  const map = new Map();
+
+  snapshots.forEach((snapshot) => {
+    snapshot.docs.forEach((item) => {
+      map.set(item.id, { id: item.id, ...item.data() });
+    });
+  });
+
+  return [...map.values()];
+}
+
+// প্রথম বৈধ সংখ্যা ফেরত দেয়
+function firstNumber(...values) {
+  for (const value of values) {
+    if (value === undefined || value === null || value === "") continue;
+
+    const number = Number(value);
+
+    if (Number.isFinite(number)) return number;
+  }
+
+  return null;
+}
+
+// দশমিকের পর সর্বোচ্চ ২ ঘর, বাংলা অঙ্কে
+function formatMark(value) {
+  if (value === null || value === undefined) return "—";
+
+  const rounded = Math.round(value * 100) / 100;
+
+  return toBangla(rounded);
+}
+
+function getPercent(obtained, total) {
+  if (obtained === null || !total) return null;
+
+  return (obtained / total) * 100;
+}
+
+function percentBadgeClass(percent) {
+  if (percent === null) return "badge-ghost";
+  if (percent >= 80) return "badge-success";
+  if (percent >= 40) return "badge-warning";
+  return "badge-error";
+}
+
+function getTime(value) {
+  if (!value) return 0;
+
+  if (typeof value.toMillis === "function") return value.toMillis();
+
+  const time = new Date(value).getTime();
+
+  return Number.isNaN(time) ? 0 : time;
+}
+
+// অনলাইন পরীক্ষার ফলাফল → টেবিলের সারি
+function toOnlineRow(result) {
+  const obtained = firstNumber(result.marks, result.correctAnswers);
+  const total = firstNumber(
+    result.totalMarks,
+    result.fullMarks,
+    result.totalQuestions,
+  );
+
+  return {
+    id: result.id,
+    title: result.examTitle || result.examName || "অনলাইন পরীক্ষা",
+    subject: result.subjectName || result.subject || "—",
+    date: result.submittedAt,
+    correct: firstNumber(result.correctAnswers),
+    questions: firstNumber(result.totalQuestions),
+    obtained,
+    total,
+    percent: getPercent(obtained, total),
+    sortTime: getTime(result.submittedAt),
+  };
+}
+
+// অফলাইন (ম্যানুয়াল) নম্বর → টেবিলের সারি
+function toOfflineRow(result) {
+  const obtained = firstNumber(result.obtainedMark, result.marks);
+  const total = firstNumber(result.totalMark, result.totalMarks);
+
+  return {
+    id: result.id,
+    title: result.examType || result.examName || "পরীক্ষা",
+    className: result.className || "—",
+    date: result.examDate || result.updatedAt,
+    obtained,
+    total,
+    percent: getPercent(obtained, total),
+    sortTime: result.examDate
+      ? getTime(result.examDate)
+      : getTime(result.updatedAt),
   };
 }
 
@@ -148,6 +266,122 @@ function InfoItem({ icon: Icon, label, value }) {
           {value || "তথ্য নেই"}
         </p>
       </div>
+    </div>
+  );
+}
+
+function PercentBadge({ percent }) {
+  if (percent === null) {
+    return <span className="text-base-content/40">—</span>;
+  }
+
+  return (
+    <span className={`badge badge-sm ${percentBadgeClass(percent)}`}>
+      {toBangla(percent.toFixed(1))}%
+    </span>
+  );
+}
+
+// ==================================================
+// Result Tables
+// ==================================================
+
+function OnlineResultsTable({ rows }) {
+  if (!rows.length) {
+    return (
+      <p className="rounded-lg bg-base-200 p-4 text-center text-xs text-base-content/60">
+        এখনো কোনো অনলাইন পরীক্ষা দেওয়া হয়নি।
+      </p>
+    );
+  }
+
+  return (
+    <div className="overflow-x-auto rounded-lg border border-base-300">
+      <table className="table table-zebra table-sm">
+        <thead>
+          <tr className="bg-base-200/70">
+            <th className="w-10">ক্রম</th>
+            <th>পরীক্ষা</th>
+            <th className="text-center">প্রাপ্ত নম্বর</th>
+          </tr>
+        </thead>
+
+        <tbody>
+          {rows.map((row, index) => (
+            <tr key={row.id}>
+              <td className="text-base-content/50">{toBangla(index + 1)}</td>
+
+              <td>
+                {row.title} ({row.subject}) <br /> {banglaDate(row.date)}
+              </td>
+
+              <td className="whitespace-nowrap text-center">
+                <span className="font-extrabold text-primary">
+                  {formatMark(row.obtained)}
+                </span>
+                <span className="text-base-content/50">
+                  {" "}
+                  / {formatMark(row.total)}
+                </span>
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
+function OfflineMarksTable({ rows }) {
+  if (!rows.length) {
+    return (
+      <p className="rounded-lg bg-base-200 p-4 text-center text-xs text-base-content/60">
+        এখনো কোনো অফলাইন পরীক্ষার নম্বর যোগ করা হয়নি।
+      </p>
+    );
+  }
+
+  return (
+    <div className="overflow-x-auto rounded-lg border border-base-300">
+      <table className="table table-zebra table-sm">
+        <thead>
+          <tr className="bg-base-200/70">
+            <th className="w-10">ক্রম</th>
+            <th>পরীক্ষা</th>
+            <th>শ্রেণি/ব্যাচ</th>
+            <th>তারিখ</th>
+            <th className="text-center">প্রাপ্ত নম্বর</th>
+            <th className="text-center">পূর্ণমান</th>
+            <th className="text-center">শতকরা</th>
+          </tr>
+        </thead>
+
+        <tbody>
+          {rows.map((row, index) => (
+            <tr key={row.id}>
+              <td className="text-base-content/50">{toBangla(index + 1)}</td>
+
+              <td className="min-w-40 font-semibold">{row.title}</td>
+
+              <td className="whitespace-nowrap">{row.className}</td>
+
+              <td className="whitespace-nowrap">{banglaDate(row.date)}</td>
+
+              <td className="text-center">
+                <span className="font-extrabold text-primary">
+                  {formatMark(row.obtained)}
+                </span>
+              </td>
+
+              <td className="text-center">{formatMark(row.total)}</td>
+
+              <td className="text-center">
+                <PercentBadge percent={row.percent} />
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
     </div>
   );
 }
@@ -361,7 +595,17 @@ export default function StudentProfile() {
 
   const [student, setStudent] = useState(null);
   const [attendanceRecords, setAttendanceRecords] = useState([]);
-  const [results, setResults] = useState([]);
+
+  // অনলাইন পরীক্ষার ফলাফল (examResults)
+  const [onlineResults, setOnlineResults] = useState([]);
+
+  // অফলাইন/ম্যানুয়াল নম্বর (examMarks — AddExamMark থেকে যোগ করা)
+  const [offlineMarks, setOfflineMarks] = useState([]);
+
+  const [resultsError, setResultsError] = useState({
+    online: false,
+    offline: false,
+  });
 
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
@@ -375,18 +619,20 @@ export default function StudentProfile() {
 
       setStudent(null);
       setAttendanceRecords([]);
-      setResults([]);
+      setOnlineResults([]);
+      setOfflineMarks([]);
+      setResultsError({ online: false, offline: false });
 
       try {
         if (!studentId) {
-          throw new Error("Student ID পাওয়া যায়নি।");
+          throw new Error("Student ID পাওয়া যায়নি।");
         }
 
         // Student
         const studentSnap = await getDoc(doc(db, "students", studentId));
 
         if (!studentSnap.exists()) {
-          throw new Error("শিক্ষার্থীর তথ্য পাওয়া যায়নি।");
+          throw new Error("শিক্ষার্থীর তথ্য পাওয়া যায়নি।");
         }
 
         const studentData = {
@@ -400,79 +646,52 @@ export default function StudentProfile() {
 
         const actualStudentId = String(studentData.studentId ?? "");
 
-        // Attendance: support both studentDocId and studentId
-        const attendanceQueries = [];
-
-        if (studentSnap.id) {
-          attendanceQueries.push(
-            getDocs(
-              query(
-                collection(db, "attendance"),
-                where("studentDocId", "==", studentSnap.id),
-              ),
-            ),
-          );
-        }
-
-        if (actualStudentId) {
-          attendanceQueries.push(
-            getDocs(
-              query(
-                collection(db, "attendance"),
-                where("studentId", "==", actualStudentId),
-              ),
-            ),
-          );
-        }
-
-        const attendanceSnapshots = await Promise.all(attendanceQueries);
-
-        const attendanceMap = new Map();
-
-        attendanceSnapshots.forEach((snapshot) => {
-          snapshot.docs.forEach((item) => {
-            attendanceMap.set(item.id, {
-              id: item.id,
-              ...item.data(),
-            });
-          });
+        // Attendance: one flat list of this student's records, read from
+        // both the new per-class sheets and the old per-student documents.
+        const attendance = await getStudentAttendance({
+          db,
+          studentDocumentId: studentSnap.id,
+          studentId: actualStudentId,
         });
-
-        const attendance = [...attendanceMap.values()].sort((a, b) =>
-          String(a.date ?? "").localeCompare(String(b.date ?? "")),
-        );
 
         if (active) {
           setAttendanceRecords(attendance);
         }
 
-        // Results
-        if (actualStudentId) {
-          try {
-            const resultsSnap = await getDocs(
-              query(
-                collection(db, "results"),
-                where("studentId", "==", actualStudentId),
-              ),
-            );
+        // Online results + offline marks (একটি ব্যর্থ হলে অন্যটি চলবে)
+        const identityFields = (documentField) => [
+          ["studentId", actualStudentId],
+          [documentField, studentSnap.id],
+        ];
 
-            if (active) {
-              setResults(
-                resultsSnap.docs.map((item) => ({
-                  id: item.id,
-                  ...item.data(),
-                })),
-              );
-            }
-          } catch (err) {
-            console.warn("Results loading error:", err);
-          }
+        const [onlineOutcome, offlineOutcome] = await Promise.allSettled([
+          fetchByFields("examResults", identityFields("studentDocumentId")),
+          fetchByFields("examMarks", identityFields("studentDocumentId")),
+        ]);
+
+        if (!active) return;
+
+        if (onlineOutcome.status === "fulfilled") {
+          setOnlineResults(onlineOutcome.value);
+        } else {
+          console.warn("Online results loading error:", onlineOutcome.reason);
         }
+
+        if (offlineOutcome.status === "fulfilled") {
+          setOfflineMarks(offlineOutcome.value);
+        } else {
+          console.warn("Offline marks loading error:", offlineOutcome.reason);
+        }
+
+        setResultsError({
+          online: onlineOutcome.status === "rejected",
+          offline: offlineOutcome.status === "rejected",
+        });
       } catch (err) {
         console.error("Student profile error:", err);
 
         if (active) {
-          setError(err?.message || "প্রোফাইল লোড করা যায়নি।");
+          setError(err?.message || "প্রোফাইল লোড করা যায়নি।");
         }
       } finally {
         if (active) {
@@ -534,6 +753,19 @@ export default function StudentProfile() {
     };
   }, [attendanceRecords]);
 
+  // টেবিলের সারি (নতুন পরীক্ষা আগে)
+  const onlineRows = useMemo(
+    () =>
+      onlineResults.map(toOnlineRow).sort((a, b) => b.sortTime - a.sortTime),
+    [onlineResults],
+  );
+
+  const offlineRows = useMemo(
+    () =>
+      offlineMarks.map(toOfflineRow).sort((a, b) => b.sortTime - a.sortTime),
+    [offlineMarks],
+  );
+
   // Loading
   if (loading) {
     return (
@@ -550,10 +782,10 @@ export default function StudentProfile() {
         <div className="w-full max-w-sm rounded-2xl bg-base-100 p-6 text-center shadow">
           <FiShield className="mx-auto mb-3 text-3xl text-error" />
 
-          <h2 className="font-bold">প্রোফাইল পাওয়া যায়নি</h2>
+          <h2 className="font-bold">প্রোফাইল পাওয়া যায়নি</h2>
 
           <p className="mt-2 text-sm text-base-content/60">
-            {error || "শিক্ষার্থীর তথ্য পাওয়া যায়নি।"}
+            {error || "শিক্ষার্থীর তথ্য পাওয়া যায়নি।"}
           </p>
 
           <Link to="/" className="btn btn-primary btn-sm mt-5">
@@ -598,7 +830,7 @@ export default function StudentProfile() {
               <StatusIcon size={13} />
               <span className="hidden xs:inline">{status.label}</span>
               <span className="xs:hidden">
-                {student.approved === true ? "সক্রিয়" : "অপেক্ষমাণ"}
+                {student.approved === true ? "সক্রিয়" : "অপেক্ষমাণ"}
               </span>
             </span>
           </div>
@@ -620,7 +852,7 @@ export default function StudentProfile() {
                 student.gender === "male"
                   ? "ছেলে"
                   : student.gender === "female"
-                    ? "মেয়ে"
+                    ? "মেয়ে"
                     : student.gender
               }
             />
@@ -665,7 +897,7 @@ export default function StudentProfile() {
               {[
                 ["মোট", dressCodeSummary.total, "text-base-content"],
                 ["পরিহিত", dressCodeSummary.worn, "text-success"],
-                ["পরিহিত নয়", dressCodeSummary.notWorn, "text-error"],
+                ["পরিহিত নয়", dressCodeSummary.notWorn, "text-error"],
               ].map(([label, value, color]) => (
                 <div
                   key={label}
@@ -706,41 +938,31 @@ export default function StudentProfile() {
           <AttendanceCalendar records={attendanceRecords} />
         </Section>
 
-        {/* Results */}
-        <Section title="পরীক্ষার ফলাফল" icon={FiAward}>
-          {results.length ? (
-            <div className="space-y-2">
-              {results.map((result) => (
-                <div
-                  key={result.id}
-                  className="flex items-center justify-between gap-3 rounded-lg bg-base-200 p-3"
-                >
-                  <div className="min-w-0">
-                    <p className="truncate text-sm font-bold">
-                      {result.examName || "পরীক্ষা"}
-                    </p>
-
-                    <p className="mt-1 truncate text-xs text-base-content/60">
-                      {result.subjectName || result.subject || "বিষয়"}
-                    </p>
-                  </div>
-
-                  <div className="shrink-0 text-right">
-                    <p className="text-lg font-extrabold text-primary">
-                      {toBangla(result.marks ?? "—")}
-                    </p>
-
-                    <p className="text-[10px] text-base-content/50">
-                      পূর্ণমান: {toBangla(result.totalMarks ?? "—")}
-                    </p>
-                  </div>
-                </div>
-              ))}
-            </div>
-          ) : (
-            <p className="rounded-lg bg-base-200 p-4 text-center text-xs text-base-content/60">
-              এখনো কোনো পরীক্ষার ফলাফল প্রকাশ করা হয়নি।
+        {/* Online Exam Results */}
+        <Section
+          title={`অনলাইন পরীক্ষার ফলাফল (${toBangla(onlineRows.length)})`}
+          icon={FiMonitor}
+        >
+          {resultsError.online ? (
+            <p className="rounded-lg bg-error/10 p-4 text-center text-xs text-error">
+              অনলাইন পরীক্ষার ফলাফল লোড করা যায়নি। Firestore Rules যাচাই করুন।
             </p>
+          ) : (
+            <OnlineResultsTable rows={onlineRows} />
+          )}
+        </Section>
+
+        {/* Offline / Manual Exam Marks */}
+        <Section
+          title={`অফলাইন পরীক্ষার নম্বর (${toBangla(offlineRows.length)})`}
+          icon={FiEdit3}
+        >
+          {resultsError.offline ? (
+            <p className="rounded-lg bg-error/10 p-4 text-center text-xs text-error">
+              অফলাইন পরীক্ষার নম্বর লোড করা যায়নি। Firestore Rules যাচাই করুন।
+            </p>
+          ) : (
+            <OfflineMarksTable rows={offlineRows} />
           )}
         </Section>
       </div>

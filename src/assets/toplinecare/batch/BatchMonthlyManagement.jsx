@@ -73,11 +73,17 @@ const normalizeName = (value) =>
     .replace(/\s+/g, " ")
     .toLowerCase();
 
-const getMonthDocumentId = (batchName, monthNumber) =>
-  `${encodeURIComponent(String(batchName).trim())}_month_${monthNumber}`;
+const getMonthDocumentId = (batchId, monthNumber) =>
+  `${encodeURIComponent(String(batchId).trim())}_month_${monthNumber}`;
+
+const getDepartmentId = (record) =>
+  String(record?.departmentId ?? record?.departmentID ?? "");
 
 const getDepartmentName = (record) =>
   String(record?.departmentName ?? record?.department ?? "").trim();
+
+const getBatchId = (record) =>
+  String(record?.batchId || record?.classId || "").trim();
 
 const getBatchName = (record) =>
   String(
@@ -93,7 +99,6 @@ const getSessionDate = (session) =>
     session?.date ?? session?.sessionDate ?? session?.attendanceDate ?? "",
   ).slice(0, 10);
 
-// Batch month number, not calendar month.
 const getMonthName = (monthNumber) => `মাস ${toBangla(monthNumber)}`;
 
 const isStudentActive = (student) => {
@@ -126,7 +131,22 @@ const isCareStudent = (student) => {
   return (
     departmentName.includes("care") ||
     departmentName.includes(normalizeName(CARE_DEPARTMENT.name)) ||
-    String(student?.departmentId ?? "") === String(CARE_DEPARTMENT.id)
+    getDepartmentId(student) === String(CARE_DEPARTMENT.id)
+  );
+};
+
+const isCareMonth = (record) => {
+  const departmentId = getDepartmentId(record);
+
+  if (departmentId) {
+    return departmentId === String(CARE_DEPARTMENT.id);
+  }
+
+  const departmentName = normalizeName(getDepartmentName(record));
+
+  return (
+    departmentName === normalizeName(CARE_DEPARTMENT.name) ||
+    departmentName.includes("care")
   );
 };
 
@@ -134,7 +154,6 @@ export default function BatchMonthlyManagement() {
   const outletContext = useOutletContext();
   const user = outletContext?.user ?? null;
 
-  // Attendance records (one per student per day) for the CARE department.
   const [attendanceRecords, setAttendanceRecords] = useState([]);
   const [monthRecords, setMonthRecords] = useState([]);
   const [students, setStudents] = useState([]);
@@ -227,19 +246,29 @@ export default function BatchMonthlyManagement() {
     [batches, selectedBatchName],
   );
 
+  const selectedBatchId = String(selectedBatch?.id ?? "").trim();
+
   const selectedMonthRecords = useMemo(() => {
     if (!selectedBatch) return [];
 
     return monthRecords
-      .filter(
-        (item) =>
-          normalizeName(getDepartmentName(item)) ===
-            normalizeName(CARE_DEPARTMENT.name) &&
+      .filter((item) => {
+        if (!isCareMonth(item)) return false;
+
+        const recordBatchId = getBatchId(item);
+
+        // Prefer batchId; fallback to batchName for older records.
+        if (recordBatchId && selectedBatchId) {
+          return recordBatchId === selectedBatchId;
+        }
+
+        return (
           normalizeName(getBatchName(item)) ===
-            normalizeName(selectedBatch.name),
-      )
+          normalizeName(selectedBatch.name)
+        );
+      })
       .sort((a, b) => Number(a.monthNumber ?? 0) - Number(b.monthNumber ?? 0));
-  }, [monthRecords, selectedBatch]);
+  }, [monthRecords, selectedBatch, selectedBatchId]);
 
   const activeMonth = selectedMonthRecords.find(
     (item) => item.status === "active",
@@ -280,8 +309,6 @@ export default function BatchMonthlyManagement() {
     setTargetInput(String(target));
   }, [selectedBatchName, activeMonth?.id, latestMonth?.id]);
 
-  // One class = one unique attendance date for the selected batch,
-  // inside the active month's date range.
   const completedClasses = useMemo(() => {
     if (!activeMonth || !selectedBatch) return 0;
 
@@ -289,12 +316,15 @@ export default function BatchMonthlyManagement() {
 
     attendanceRecords.forEach((record) => {
       const sameBatch =
-        normalizeName(getBatchName(record)) ===
-        normalizeName(selectedBatch.name);
+        getBatchId(record) && selectedBatchId
+          ? getBatchId(record) === selectedBatchId
+          : normalizeName(getBatchName(record)) ===
+            normalizeName(selectedBatch.name);
 
       const sameDepartment =
+        getDepartmentId(record) === String(CARE_DEPARTMENT.id) ||
         normalizeName(getDepartmentName(record)) ===
-        normalizeName(CARE_DEPARTMENT.name);
+          normalizeName(CARE_DEPARTMENT.name);
 
       const sessionDate = getSessionDate(record);
 
@@ -309,18 +339,57 @@ export default function BatchMonthlyManagement() {
     });
 
     return uniqueDates.size;
-  }, [activeMonth, attendanceRecords, selectedBatch]);
+  }, [activeMonth, attendanceRecords, selectedBatch, selectedBatchId]);
 
-  async function startFirstMonth() {
-    if (!selectedBatch || !initialStartDate) {
-      toast.error("ব্যাচ ও শুরুর তারিখ নির্বাচন করুন।");
-      return;
-    }
-
+  function validateTarget() {
     if (!Number.isInteger(Number(targetInput)) || Number(targetInput) < 1) {
       toast.error("মোট ক্লাসের সংখ্যা ১ বা তার বেশি দিন।");
+      return false;
+    }
+
+    return true;
+  }
+
+  function validateBatch() {
+    if (!selectedBatch || !selectedBatchId) {
+      toast.error(
+        "ব্যাচের সঠিক ID পাওয়া যায়নি। departments.js পরীক্ষা করুন।",
+      );
+      return false;
+    }
+
+    return true;
+  }
+
+  function getMonthPayload(monthNumber, startDate) {
+    return {
+      departmentId: String(CARE_DEPARTMENT.id),
+      departmentName: CARE_DEPARTMENT.name,
+
+      batchId: selectedBatchId,
+      batchName: selectedBatch.name,
+
+      monthNumber,
+      startDate,
+      endDate: getMonthEnd(startDate),
+
+      status: "active",
+      plannedClasses: Number(targetInput),
+
+      createdAt: serverTimestamp(),
+      createdBy: user?.uid ?? "",
+    };
+  }
+
+  async function startFirstMonth() {
+    if (!validateBatch()) return;
+
+    if (!initialStartDate) {
+      toast.error("শুরুর তারিখ নির্বাচন করুন।");
       return;
     }
+
+    if (!validateTarget()) return;
 
     if (latestMonth) {
       toast.error("এই ব্যাচের মাসের রেকর্ড ইতিমধ্যে রয়েছে।");
@@ -345,20 +414,10 @@ export default function BatchMonthlyManagement() {
       const monthRef = doc(
         db,
         "batchMonthStates",
-        getMonthDocumentId(selectedBatch.name, 1),
+        getMonthDocumentId(selectedBatchId, 1),
       );
 
-      await setDoc(monthRef, {
-        departmentName: CARE_DEPARTMENT.name,
-        batchName: selectedBatch.name,
-        monthNumber: 1,
-        startDate: initialStartDate,
-        endDate: getMonthEnd(initialStartDate),
-        status: "active",
-        plannedClasses: Number(targetInput),
-        createdAt: serverTimestamp(),
-        createdBy: user?.uid ?? "",
-      });
+      await setDoc(monthRef, getMonthPayload(1, initialStartDate));
 
       toast.success("প্রথম মাস শুরু হয়েছে।");
       await loadData();
@@ -372,11 +431,7 @@ export default function BatchMonthlyManagement() {
 
   async function saveClassTarget() {
     if (!activeMonth) return;
-
-    if (!Number.isInteger(Number(targetInput)) || Number(targetInput) < 1) {
-      toast.error("মোট ক্লাসের সংখ্যা ১ বা তার বেশি দিন।");
-      return;
-    }
+    if (!validateTarget()) return;
 
     const confirmed = await Swal.fire({
       title: "মোট ক্লাস পরিবর্তন করবেন?",
@@ -469,15 +524,14 @@ export default function BatchMonthlyManagement() {
   }
 
   async function startNextMonth() {
+    if (!validateBatch()) return;
+
     if (!latestMonth || latestMonth.status !== "closed") {
       toast.error("আগের মাস বন্ধ করার পর নতুন মাস শুরু করুন।");
       return;
     }
 
-    if (!Number.isInteger(Number(targetInput)) || Number(targetInput) < 1) {
-      toast.error("মোট ক্লাসের সংখ্যা ১ বা তার বেশি দিন।");
-      return;
-    }
+    if (!validateTarget()) return;
 
     const nextMonthNumber = Number(latestMonth.monthNumber) + 1;
 
@@ -509,20 +563,10 @@ export default function BatchMonthlyManagement() {
       const monthRef = doc(
         db,
         "batchMonthStates",
-        getMonthDocumentId(selectedBatch.name, nextMonthNumber),
+        getMonthDocumentId(selectedBatchId, nextMonthNumber),
       );
 
-      await setDoc(monthRef, {
-        departmentName: CARE_DEPARTMENT.name,
-        batchName: selectedBatch.name,
-        monthNumber: nextMonthNumber,
-        startDate: nextStartDate,
-        endDate: getMonthEnd(nextStartDate),
-        status: "active",
-        plannedClasses: Number(targetInput),
-        createdAt: serverTimestamp(),
-        createdBy: user?.uid ?? "",
-      });
+      await setDoc(monthRef, getMonthPayload(nextMonthNumber, nextStartDate));
 
       toast.success(`${getMonthName(nextMonthNumber)} শুরু হয়েছে।`);
       await loadData();
@@ -581,7 +625,7 @@ export default function BatchMonthlyManagement() {
             )}
 
             {batches.map((batch) => (
-              <option key={batch.name} value={batch.name}>
+              <option key={batch.id} value={batch.name}>
                 {batch.name} (
                 {toBangla(activeStudentCounts[normalizeName(batch.name)] ?? 0)}{" "}
                 জন)

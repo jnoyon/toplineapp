@@ -3,21 +3,19 @@ import {
   doc,
   getDoc,
   getDocs,
-  query,
   serverTimestamp,
   updateDoc,
-  where,
 } from "firebase/firestore";
 
+import { db } from "../assets/firebase/firebase.init";
+import { departments } from "../config/departments";
+
 /* =========================================================
-   Configuration
+   Constants
 ========================================================= */
 
-const CARE_DEPARTMENT_ID = "3";
-
-const ATTENDANCE_COLLECTION = "attendance";
-const OFFLINE_EXAM_COLLECTION = "examMarks";
-const ONLINE_EXAM_COLLECTION = "examResults";
+const CARE_DEPARTMENT_ID = String(departments.CARE.id);
+const CARE_DEPARTMENT_NAME = departments.CARE.name;
 
 /* =========================================================
    Helpers
@@ -26,41 +24,23 @@ const ONLINE_EXAM_COLLECTION = "examResults";
 const normalize = (value) =>
   String(value ?? "")
     .trim()
+    .replace(/\s+/g, " ")
     .toLowerCase();
 
-const toDateString = (value) => {
-  if (!value) return "";
+const normalizeId = (value) => {
+  const id = String(value ?? "").trim();
 
-  if (typeof value === "string") {
-    return value.slice(0, 10);
-  }
-
-  if (typeof value?.toDate === "function") {
-    return toDateString(value.toDate());
-  }
-
-  if (value instanceof Date && !Number.isNaN(value.getTime())) {
-    return [
-      value.getFullYear(),
-      String(value.getMonth() + 1).padStart(2, "0"),
-      String(value.getDate()).padStart(2, "0"),
-    ].join("-");
-  }
-
-  return "";
+  return /^\d+$/.test(id) ? String(Number(id)) : id;
 };
 
-const getToday = () => toDateString(new Date());
-
-const getCurrentMonth = () => getToday().slice(0, 7);
-
-const getMonthStart = (month) => `${month}-01`;
-
 const getDepartmentId = (record) =>
-  String(record?.departmentId ?? record?.departmentID ?? "");
+  normalizeId(record?.departmentId ?? record?.departmentID);
 
 const getDepartmentName = (record) =>
   String(record?.departmentName ?? record?.department ?? "").trim();
+
+const getBatchId = (record) =>
+  String(record?.batchId || record?.classId || "").trim();
 
 const getBatchName = (record) =>
   String(
@@ -71,515 +51,506 @@ const getBatchName = (record) =>
       "",
   ).trim();
 
-const getBatchId = (record) =>
-  String(record?.batchId ?? record?.classId ?? "").trim();
+const getStudentIdentifiers = (record) =>
+  [
+    record?.studentDocumentId,
+    record?.studentDocId,
+    record?.studentId,
+    record?.studentID,
+    record?.uid,
+  ]
+    .filter((value) => value !== undefined && value !== null && value !== "")
+    .map(String);
 
-const isCareStudent = (student) => {
-  const departmentId = getDepartmentId(student);
-
-  const departmentName = normalize(
-    student?.departmentName ?? student?.department ?? "",
-  );
-
-  return (
-    departmentId === CARE_DEPARTMENT_ID ||
-    departmentName.includes("care") ||
-    departmentName.includes("কেয়ার") ||
-    departmentName.includes("কেয়ার")
-  );
-};
-
-const isCareDepartmentRecord = (record) => {
-  const departmentId = getDepartmentId(record);
-  const departmentName = normalize(getDepartmentName(record));
+const isSameStudent = (record, studentDocumentId, studentId) => {
+  const identifiers = getStudentIdentifiers(record);
 
   return (
-    departmentId === CARE_DEPARTMENT_ID ||
-    departmentName.includes("care") ||
-    departmentName.includes("কেয়ার") ||
-    departmentName.includes("কেয়ার")
+    identifiers.includes(String(studentDocumentId)) ||
+    (studentId && identifiers.includes(String(studentId)))
   );
-};
-
-const isDateInsidePeriod = (date, startDate, endDate) =>
-  Boolean(date && startDate && endDate) && date >= startDate && date <= endDate;
-
-const getRecordStudentDocumentId = (record) =>
-  String(
-    record?.studentDocumentId ??
-      record?.studentDocId ??
-      record?.documentId ??
-      "",
-  );
-
-const getRecordStudentId = (record) => String(record?.studentId ?? "");
-
-const belongsToStudent = (record, studentDocumentId, studentId) => {
-  const recordDocumentId = getRecordStudentDocumentId(record);
-  const recordStudentId = getRecordStudentId(record);
-
-  // Prefer the document ID when both IDs are available.
-  if (recordDocumentId && studentDocumentId) {
-    if (recordDocumentId === studentDocumentId) {
-      return true;
-    }
-
-    // Allow studentId fallback for legacy records.
-    return Boolean(
-      studentId && recordStudentId && recordStudentId === studentId,
-    );
-  }
-
-  return Boolean(studentId && recordStudentId && recordStudentId === studentId);
-};
-
-const getAttendanceDate = (record) =>
-  toDateString(record?.date ?? record?.attendanceDate);
-
-const getOfflineExamDate = (record) =>
-  toDateString(record?.examDate ?? record?.date);
-
-const getOnlineExamDate = (record) =>
-  toDateString(
-    record?.examDate ??
-      record?.date ??
-      record?.submittedAt ??
-      record?.createdAt,
-  );
-
-const getAttendanceMark = (record) => {
-  if (typeof record?.present === "boolean") {
-    return record.present ? 1 : 0;
-  }
-
-  return normalize(record?.status) === "present" ? 1 : 0;
-};
-
-const getOfflineMark = (record) =>
-  Math.max(0, Number(record?.obtainedMark) || 0);
-
-const getOnlineMark = (record) => {
-  const value =
-    record?.marks ??
-    record?.obtainedMark ??
-    record?.score ??
-    record?.correctAnswers;
-
-  return Math.max(0, Number(value) || 0);
 };
 
 /* =========================================================
-   Read records belonging to a student
+   Date Helpers
 ========================================================= */
 
-async function getRecordsByStudent({
-  db,
-  collectionName,
-  documentIdFields = [],
-  studentDocumentId,
-  studentId,
-}) {
-  const collectionRef = collection(db, collectionName);
-  const requests = [];
+const toDateString = (value) => {
+  if (!value) return "";
 
-  // Query every supported document-ID field.
-  if (studentDocumentId) {
-    for (const field of documentIdFields) {
-      requests.push(
-        getDocs(query(collectionRef, where(field, "==", studentDocumentId))),
-      );
-    }
+  let date;
+
+  if (typeof value?.toDate === "function") {
+    date = value.toDate();
+  } else if (value instanceof Date) {
+    date = value;
+  } else if (typeof value === "string") {
+    return value.slice(0, 10);
+  } else if (typeof value === "number") {
+    date = new Date(value);
+  } else {
+    return "";
   }
 
-  // Legacy fallback.
-  if (studentId) {
-    requests.push(
-      getDocs(query(collectionRef, where("studentId", "==", studentId))),
-    );
+  if (Number.isNaN(date.getTime())) return "";
+
+  return [
+    date.getFullYear(),
+    String(date.getMonth() + 1).padStart(2, "0"),
+    String(date.getDate()).padStart(2, "0"),
+  ].join("-");
+};
+
+const getRecordDate = (record, fields) => {
+  for (const field of fields) {
+    const date = toDateString(record?.[field]);
+
+    if (date) return date;
   }
 
-  const snapshots = await Promise.all(requests);
-  const uniqueRecords = new Map();
+  return "";
+};
 
-  snapshots.forEach((snapshot) => {
-    snapshot.docs.forEach((item) => {
-      uniqueRecords.set(item.id, {
-        id: item.id,
-        ...item.data(),
-      });
-    });
-  });
+const isWithinPeriod = (date, period) =>
+  Boolean(date && date >= period.startDate && date <= period.endDate);
 
-  return [...uniqueRecords.values()].filter((record) =>
-    belongsToStudent(record, studentDocumentId, studentId),
+const getCurrentMonthPeriod = () => {
+  const now = new Date();
+
+  const year = now.getFullYear();
+  const month = String(now.getMonth() + 1).padStart(2, "0");
+
+  const startDate = `${year}-${month}-01`;
+
+  const lastDay = new Date(year, now.getMonth() + 1, 0).getDate();
+
+  const endDate = `${year}-${month}-${String(lastDay).padStart(2, "0")}`;
+
+  return {
+    startDate,
+    endDate,
+    periodId: `${year}-${month}`,
+  };
+};
+
+/* =========================================================
+   Mark Helpers
+========================================================= */
+
+const getNumericMark = (...values) => {
+  const value = values.find(
+    (item) => item !== undefined && item !== null && item !== "",
   );
+
+  const number = Number(value);
+
+  return Number.isFinite(number) ? number : 0;
+};
+
+/* =========================================================
+   Department Helpers
+========================================================= */
+
+const isCareDepartment = (student) => {
+  const departmentId = getDepartmentId(student);
+
+  const departmentName = normalize(getDepartmentName(student));
+
+  return (
+    departmentId === CARE_DEPARTMENT_ID ||
+    departmentName === normalize(CARE_DEPARTMENT_NAME) ||
+    departmentName.includes("care")
+  );
+};
+
+function matchesDepartment(record, student) {
+  const recordDepartmentId = getDepartmentId(record);
+  const studentDepartmentId = getDepartmentId(student);
+
+  if (recordDepartmentId && studentDepartmentId) {
+    return recordDepartmentId === studentDepartmentId;
+  }
+
+  const recordDepartmentName = normalize(getDepartmentName(record));
+
+  const studentDepartmentName = normalize(getDepartmentName(student));
+
+  if (recordDepartmentName && studentDepartmentName) {
+    return recordDepartmentName === studentDepartmentName;
+  }
+
+  return true;
 }
 
 /* =========================================================
-   Get Care batch period
+   Care Batch Period
 ========================================================= */
 
-async function getCareBatchPeriod({ db, student }) {
-  const batchName = getBatchName(student);
-  const batchId = getBatchId(student);
+async function getCareBatchPeriod(student) {
+  const studentBatchId = getBatchId(student);
+  const studentBatchName = getBatchName(student);
 
-  if (!batchName && !batchId) {
-    throw new Error("Care student-এর batchName অথবা batchId পাওয়া যায়নি।");
+  if (!studentBatchId && !studentBatchName) {
+    throw new Error("Care student batch information not found.");
   }
 
   const snapshot = await getDocs(collection(db, "batchMonthStates"));
 
-  let months = snapshot.docs.map((item) => ({
-    id: item.id,
-    ...item.data(),
-  }));
+  const matchingMonths = snapshot.docs
+    .map((item) => ({
+      id: item.id,
+      ...item.data(),
+    }))
+    .filter((month) => {
+      const departmentId = getDepartmentId(month);
 
-  // Match the Care department.
-  months = months.filter((item) => {
-    const hasDepartmentInformation =
-      Boolean(getDepartmentId(item)) || Boolean(getDepartmentName(item));
+      const departmentName = normalize(getDepartmentName(month));
 
-    return isCareDepartmentRecord(item) || !hasDepartmentInformation;
-  });
+      const isCareMonth =
+        departmentId === CARE_DEPARTMENT_ID ||
+        departmentName === normalize(CARE_DEPARTMENT_NAME) ||
+        departmentName.includes("care");
 
-  // Prefer batch ID.
-  if (batchId) {
-    const matchingBatchId = months.filter(
-      (item) => getBatchId(item) === batchId,
-    );
+      if (!isCareMonth) return false;
 
-    if (matchingBatchId.length > 0) {
-      months = matchingBatchId;
-    } else {
-      months = months.filter(
-        (item) => normalize(getBatchName(item)) === normalize(batchName),
-      );
-    }
-  } else {
-    months = months.filter(
-      (item) => normalize(getBatchName(item)) === normalize(batchName),
-    );
-  }
+      const monthBatchId = getBatchId(month);
 
-  months = months
-    .filter((item) => toDateString(item.startDate))
-    .sort((a, b) => {
-      const difference = toDateString(a.startDate).localeCompare(
-        toDateString(b.startDate),
-      );
-
-      if (difference !== 0) {
-        return difference;
+      if (monthBatchId && studentBatchId) {
+        return monthBatchId === studentBatchId;
       }
 
-      return Number(a.monthNumber ?? 0) - Number(b.monthNumber ?? 0);
-    });
+      return normalize(getBatchName(month)) === normalize(studentBatchName);
+    })
+    .filter(
+      (month) => toDateString(month.startDate) && toDateString(month.endDate),
+    )
+    .sort((a, b) => Number(a.monthNumber ?? 0) - Number(b.monthNumber ?? 0));
 
-  if (months.length === 0) {
-    return {
-      startDate: "",
-      endDate: "",
-      period: `care:${batchId || batchName}`,
-      hasPeriod: false,
-    };
+  if (!matchingMonths.length) {
+    throw new Error(`Care batch period not found for ${studentBatchName}.`);
   }
 
-  const firstMonth = months[0];
-  const latestMonth = months[months.length - 1];
+  const activeMonth = matchingMonths.find((month) => month.status === "active");
 
-  const startDate = toDateString(firstMonth.startDate);
+  const selectedMonth =
+    activeMonth || matchingMonths[matchingMonths.length - 1];
 
-  const latestMonthEndDate = toDateString(
-    latestMonth.endDate ?? latestMonth.closedDate,
+  const startDate = toDateString(selectedMonth.startDate);
+
+  const endDate = toDateString(
+    selectedMonth.status === "closed"
+      ? selectedMonth.closedDate || selectedMonth.endDate
+      : selectedMonth.endDate,
   );
-
-  let endDate;
-
-  if (normalize(latestMonth.status) === "closed") {
-    endDate = latestMonthEndDate || getToday();
-  } else {
-    endDate = latestMonthEndDate
-      ? [latestMonthEndDate, getToday()].sort()[0]
-      : getToday();
-  }
 
   return {
     startDate,
     endDate,
-    period: `care:${batchId || batchName}`,
-    hasPeriod: true,
+    periodId: `care:${studentBatchId || normalize(studentBatchName)}`,
+    batchId: studentBatchId,
+    batchName: studentBatchName,
+    monthNumber: Number(selectedMonth.monthNumber ?? 0),
+    status: selectedMonth.status,
   };
 }
 
 /* =========================================================
-   Main function
+   Batch Matching
 ========================================================= */
 
-/**
- * Calculates:
- *
- * currentMark = attendanceMark + offlineMark + onlineMark
- *
- * Academy / Coaching:
- * Current calendar month.
- *
- * Care:
- * From the first matched batch month through the latest
- * matched batch month.
- */
-export async function calculateCurrentMark({
-  db,
-  studentDocumentId,
-  studentId,
-}) {
-  if (!db) {
-    throw new Error("calculateCurrentMark: db is required.");
+function matchesBatch(record, period, isCare) {
+  if (!isCare) return true;
+
+  const recordBatchId = getBatchId(record);
+
+  if (recordBatchId && period.batchId) {
+    return recordBatchId === period.batchId;
   }
+
+  const recordBatchName = normalize(getBatchName(record));
+
+  return (
+    recordBatchName !== "" && recordBatchName === normalize(period.batchName)
+  );
+}
+
+/* =========================================================
+   Attendance
+========================================================= */
+
+function isPresent(record) {
+  const status = normalize(
+    record?.attendanceStatus ?? record?.attendance ?? record?.status ?? "",
+  );
+
+  return (
+    record?.present === true ||
+    record?.isPresent === true ||
+    status === "present" ||
+    status === "উপস্থিত" ||
+    status === "প্রেজেন্ট"
+  );
+}
+
+function getStudentAttendanceFromSheet(sheet, studentDocumentId, studentId) {
+  const records = sheet?.records;
+
+  if (!records || typeof records !== "object") {
+    return null;
+  }
+
+  // New attendance sheet uses student document ID as key.
+  const directRecord = records[String(studentDocumentId)];
+
+  if (directRecord) {
+    return directRecord;
+  }
+
+  // Fallback if the record key differs.
+  return (
+    Object.values(records).find(
+      (item) =>
+        String(item?.studentId ?? "") === String(studentId) ||
+        String(item?.studentDocId ?? "") === String(studentDocumentId),
+    ) ?? null
+  );
+}
+
+async function calculateAttendanceMark(
+  student,
+  studentDocumentId,
+  period,
+  isCare,
+) {
+  const snapshot = await getDocs(collection(db, "attendance"));
+
+  const presentDates = new Set();
+
+  snapshot.docs.forEach((item) => {
+    const sheet = item.data();
+
+    const attendanceDate = getRecordDate(sheet, [
+      "date",
+      "sessionDate",
+      "attendanceDate",
+    ]);
+
+    if (!isWithinPeriod(attendanceDate, period)) {
+      return;
+    }
+
+    if (!matchesDepartment(sheet, student)) {
+      return;
+    }
+
+    if (!matchesBatch(sheet, period, isCare)) {
+      return;
+    }
+
+    const studentAttendance = getStudentAttendanceFromSheet(
+      sheet,
+      studentDocumentId,
+      student.studentId,
+    );
+
+    if (!studentAttendance) return;
+
+    if (isPresent(studentAttendance)) {
+      presentDates.add(attendanceDate);
+    }
+  });
+
+  return presentDates.size;
+}
+
+/* =========================================================
+   Exam Matching
+========================================================= */
+
+function matchesExamBatch(record, period, isCare) {
+  if (!isCare) return true;
+
+  const recordBatchId = getBatchId(record);
+  const recordBatchName = getBatchName(record);
+
+  // Accept exam records without batch information.
+  if (!recordBatchId && !recordBatchName) {
+    return true;
+  }
+
+  return matchesBatch(record, period, true);
+}
+
+/* =========================================================
+   Offline Exam Marks
+========================================================= */
+
+async function calculateOfflineExamMark(
+  student,
+  studentDocumentId,
+  period,
+  isCare,
+) {
+  const snapshot = await getDocs(collection(db, "examMarks"));
+
+  let total = 0;
+
+  snapshot.docs.forEach((item) => {
+    const record = item.data();
+
+    if (!isSameStudent(record, studentDocumentId, student.studentId)) {
+      return;
+    }
+
+    if (!matchesDepartment(record, student)) {
+      return;
+    }
+
+    if (!matchesExamBatch(record, period, isCare)) {
+      return;
+    }
+
+    const examDate = getRecordDate(record, [
+      "examDate",
+      "date",
+      "updatedAt",
+      "createdAt",
+    ]);
+
+    if (!isWithinPeriod(examDate, period)) {
+      return;
+    }
+
+    total += getNumericMark(record.obtainedMark, record.marks);
+  });
+
+  return total;
+}
+
+/* =========================================================
+   Online Exam Marks
+========================================================= */
+
+async function calculateOnlineExamMark(
+  student,
+  studentDocumentId,
+  period,
+  isCare,
+) {
+  const snapshot = await getDocs(collection(db, "examResults"));
+
+  let total = 0;
+
+  snapshot.docs.forEach((item) => {
+    const record = item.data();
+
+    if (!isSameStudent(record, studentDocumentId, student.studentId)) {
+      return;
+    }
+
+    if (!matchesDepartment(record, student)) {
+      return;
+    }
+
+    if (!matchesExamBatch(record, period, isCare)) {
+      return;
+    }
+
+    const examDate = getRecordDate(record, [
+      "submittedAt",
+      "createdAt",
+      "examDate",
+      "date",
+    ]);
+
+    if (!isWithinPeriod(examDate, period)) {
+      return;
+    }
+
+    total += getNumericMark(
+      record.marks,
+      record.obtainedMark,
+      record.score,
+      record.correctAnswers,
+    );
+  });
+
+  return total;
+}
+
+/* =========================================================
+   Main Function
+========================================================= */
+
+export async function calculateCurrentMark(input) {
+  // Supports string or object argument.
+  const studentDocumentId =
+    typeof input === "object" && input !== null
+      ? input.studentDocumentId || input.documentId || input.docId
+      : input;
 
   if (!studentDocumentId) {
-    throw new Error("calculateCurrentMark: studentDocumentId is required.");
+    throw new Error("Student document ID is required.");
   }
 
-  /* -----------------------------------------
-     1. Read student
-  ----------------------------------------- */
+  try {
+    const studentRef = doc(db, "students", String(studentDocumentId));
 
-  const studentRef = doc(db, "students", studentDocumentId);
+    const studentSnapshot = await getDoc(studentRef);
 
-  const studentSnapshot = await getDoc(studentRef);
+    if (!studentSnapshot.exists()) {
+      throw new Error(`Student not found. Document ID: ${studentDocumentId}`);
+    }
 
-  if (!studentSnapshot.exists()) {
-    throw new Error(`Student not found: ${studentDocumentId}`);
-  }
+    const student = {
+      id: studentSnapshot.id,
+      ...studentSnapshot.data(),
+    };
 
-  const student = {
-    id: studentSnapshot.id,
-    ...studentSnapshot.data(),
-  };
+    const isCare = isCareDepartment(student);
 
-  const resolvedStudentId = String(student.studentId ?? studentId ?? "");
+    const period = isCare
+      ? await getCareBatchPeriod(student)
+      : getCurrentMonthPeriod();
 
-  const careStudent = isCareStudent(student);
+    const [attendanceMark, offlineExamMark, onlineExamMark] = await Promise.all(
+      [
+        calculateAttendanceMark(student, studentDocumentId, period, isCare),
 
-  /* -----------------------------------------
-     2. Determine calculation period
-  ----------------------------------------- */
+        calculateOfflineExamMark(student, studentDocumentId, period, isCare),
 
-  let startDate;
-  let endDate;
-  let currentMarkPeriod;
+        calculateOnlineExamMark(student, studentDocumentId, period, isCare),
+      ],
+    );
 
-  if (careStudent) {
-    const period = await getCareBatchPeriod({
-      db,
-      student,
+    const currentMark = attendanceMark + offlineExamMark + onlineExamMark;
+
+    await updateDoc(studentRef, {
+      currentMark,
+      currentMarkPeriod: period.periodId,
+      currentMarkUpdatedAt: serverTimestamp(),
     });
 
-    currentMarkPeriod = period.period;
+    const result = {
+      studentDocumentId,
+      studentId: student.studentId ?? studentDocumentId,
+      departmentId: getDepartmentId(student),
+      batchId: getBatchId(student),
+      batchName: getBatchName(student),
+      period,
+      attendanceMark,
+      offlineExamMark,
+      onlineExamMark,
+      currentMark,
+    };
 
-    if (!period.hasPeriod) {
-      // Do not overwrite existing marks with zero when
-      // the batch period configuration is missing.
-      console.error("CurrentMark: Care batch period not found.", {
-        studentDocumentId,
-        studentId: resolvedStudentId,
-        batchId: getBatchId(student),
-        batchName: getBatchName(student),
-      });
+    console.log("CurrentMark calculated successfully:", result);
 
-      throw new Error(
-        "Care batch-এর batchMonthStates পাওয়া যায়নি। " +
-          "currentMark আপডেট করা হয়নি।",
-      );
-    }
-
-    startDate = period.startDate;
-    endDate = period.endDate;
-  } else {
-    currentMarkPeriod = getCurrentMonth();
-    startDate = getMonthStart(currentMarkPeriod);
-    endDate = getToday();
+    return result;
+  } catch (error) {
+    console.error("Calculate currentMark error:", error);
+    throw error;
   }
-
-  /* -----------------------------------------
-     3. Read source records
-  ----------------------------------------- */
-
-  const [attendanceRecords, offlineRecords, onlineRecords] = await Promise.all([
-    getRecordsByStudent({
-      db,
-      collectionName: ATTENDANCE_COLLECTION,
-      documentIdFields: ["studentDocId", "studentDocumentId"],
-      studentDocumentId,
-      studentId: resolvedStudentId,
-    }),
-
-    getRecordsByStudent({
-      db,
-      collectionName: OFFLINE_EXAM_COLLECTION,
-      documentIdFields: ["studentDocumentId", "studentDocId"],
-      studentDocumentId,
-      studentId: resolvedStudentId,
-    }),
-
-    getRecordsByStudent({
-      db,
-      collectionName: ONLINE_EXAM_COLLECTION,
-      documentIdFields: ["studentDocumentId", "studentDocId"],
-      studentDocumentId,
-      studentId: resolvedStudentId,
-    }),
-  ]);
-
-  /* -----------------------------------------
-     4. Filter by Care batch
-  ----------------------------------------- */
-
-  const belongsToCurrentBatch = (record) => {
-    if (!careStudent) {
-      return true;
-    }
-
-    const studentBatchId = getBatchId(student);
-    const recordBatchId = getBatchId(record);
-
-    const studentBatchName = normalize(getBatchName(student));
-
-    const recordBatchName = normalize(getBatchName(record));
-
-    if (studentBatchId && recordBatchId) {
-      return studentBatchId === recordBatchId;
-    }
-
-    if (studentBatchName && recordBatchName) {
-      return studentBatchName === recordBatchName;
-    }
-
-    // Cannot safely match records without batch information.
-    return false;
-  };
-
-  /* -----------------------------------------
-     5. Calculate attendance marks
-  ----------------------------------------- */
-
-  const filteredAttendance = attendanceRecords
-    .filter(belongsToCurrentBatch)
-    .filter((record) =>
-      isDateInsidePeriod(getAttendanceDate(record), startDate, endDate),
-    );
-
-  const attendanceMark = filteredAttendance.reduce(
-    (sum, record) => sum + getAttendanceMark(record),
-    0,
-  );
-
-  /* -----------------------------------------
-     6. Calculate offline exam marks
-  ----------------------------------------- */
-
-  const filteredOffline = offlineRecords
-    .filter(belongsToCurrentBatch)
-    .filter((record) =>
-      isDateInsidePeriod(getOfflineExamDate(record), startDate, endDate),
-    );
-
-  const offlineMark = filteredOffline.reduce(
-    (sum, record) => sum + getOfflineMark(record),
-    0,
-  );
-
-  /* -----------------------------------------
-     7. Calculate online exam marks
-  ----------------------------------------- */
-
-  const filteredOnline = onlineRecords
-    .filter(belongsToCurrentBatch)
-    .filter((record) =>
-      isDateInsidePeriod(getOnlineExamDate(record), startDate, endDate),
-    );
-
-  const onlineMark = filteredOnline.reduce(
-    (sum, record) => sum + getOnlineMark(record),
-    0,
-  );
-
-  /* -----------------------------------------
-     8. Calculate total
-  ----------------------------------------- */
-
-  const currentMark = attendanceMark + offlineMark + onlineMark;
-
-  /* -----------------------------------------
-     9. Debug information
-  ----------------------------------------- */
-
-  console.log("Current Mark Debug:", {
-    studentDocumentId,
-    studentId: resolvedStudentId,
-    departmentId: getDepartmentId(student),
-    careStudent,
-    batchId: getBatchId(student),
-    batchName: getBatchName(student),
-    startDate,
-    endDate,
-    attendanceCount: attendanceRecords.length,
-    filteredAttendanceCount: filteredAttendance.length,
-    offlineExamCount: offlineRecords.length,
-    filteredOfflineExamCount: filteredOffline.length,
-    onlineExamCount: onlineRecords.length,
-    filteredOnlineExamCount: filteredOnline.length,
-    attendanceMark,
-    offlineMark,
-    onlineMark,
-    currentMark,
-  });
-
-  console.table(
-    filteredOffline.map((record) => ({
-      id: record.id,
-      studentId: record.studentId,
-      studentDocumentId: record.studentDocumentId,
-      studentDocId: record.studentDocId,
-      batchId: record.batchId,
-      classId: record.classId,
-      examDate: record.examDate,
-      obtainedMark: record.obtainedMark,
-    })),
-  );
-
-  console.table(
-    filteredOnline.map((record) => ({
-      id: record.id,
-      studentId: record.studentId,
-      studentDocumentId: record.studentDocumentId,
-      studentDocId: record.studentDocId,
-      batchId: record.batchId,
-      classId: record.classId,
-      examDate: record.examDate,
-      marks: record.marks,
-      obtainedMark: record.obtainedMark,
-      score: record.score,
-      correctAnswers: record.correctAnswers,
-      calculatedMark: getOnlineMark(record),
-    })),
-  );
-
-  /* -----------------------------------------
-     10. Update student document
-  ----------------------------------------- */
-
-  await updateDoc(studentRef, {
-    currentMark,
-    currentMarkPeriod,
-    currentMarkUpdatedAt: serverTimestamp(),
-  });
-
-  return {
-    currentMark,
-    currentMarkPeriod,
-    attendanceMark,
-    offlineMark,
-    onlineMark,
-  };
 }
+
+export default calculateCurrentMark;

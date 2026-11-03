@@ -1,22 +1,112 @@
 import { useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router";
+
 import {
   collection,
   doc,
   getDoc,
   getDocs,
+  increment,
+  query,
   serverTimestamp,
   updateDoc,
+  where,
+  writeBatch,
 } from "firebase/firestore";
+
 import { onAuthStateChanged } from "firebase/auth";
 import Swal from "sweetalert2";
 import toast from "react-hot-toast";
 
 import { auth, db } from "../assets/firebase/firebase.init";
+
+import {
+  getUserRole,
+  isAdmin,
+  isDepartmentHead,
+  isExamController,
+} from "../config/permissions";
+
 import { departments } from "../config/departments";
 
-const SUPERADMIN_EMAIL = "jihadur51@gmail.com";
 const IMGBB_API_KEY = import.meta.env.VITE_IMGBB_API_KEY;
+
+// --------------------------------------------------
+// Helpers
+// --------------------------------------------------
+
+const normalize = (value) =>
+  String(value ?? "")
+    .trim()
+    .toLowerCase()
+    .replace(/\s+/g, " ");
+
+const getInitials = (name) =>
+  String(name || "?")
+    .trim()
+    .slice(0, 2)
+    .toUpperCase();
+
+const getPhoto = (student) =>
+  student?.photoURL ||
+  student?.photoUrl ||
+  student?.imageUrl ||
+  student?.photo ||
+  student?.image ||
+  student?.profileImage ||
+  "";
+
+const getPhone = (student) =>
+  String(
+    student?.phone || student?.mobile || student?.guardianPhone || "",
+  ).trim();
+
+const getFatherName = (student) =>
+  student?.fatherName || student?.father || student?.fathersName || "";
+
+const isCareStudent = (student) =>
+  normalize(student.departmentName).includes("কেয়ার") ||
+  normalize(student.departmentName).includes("care");
+
+const isStudentActive = (student) =>
+  student.isActive !== false &&
+  student.status !== "disabled" &&
+  student.status !== "inactive" &&
+  student.status !== "blocked";
+
+const getDepartmentPermissions = (profile) => {
+  const permissions = [
+    ...(profile?.departmentIds || []),
+    ...(profile?.departments || []).map((item) =>
+      typeof item === "object"
+        ? (item.departmentId ?? item.id ?? item.name)
+        : item,
+    ),
+  ];
+
+  if (profile?.departmentId) {
+    permissions.push(profile.departmentId);
+  }
+
+  if (profile?.departmentName) {
+    permissions.push(profile.departmentName);
+  }
+
+  if (profile?.departmentHeadOf) {
+    permissions.push(...profile.departmentHeadOf);
+  }
+
+  return permissions.map(normalize);
+};
+
+const hasDepartmentPermission = (department, permissions) => {
+  if (!department) return false;
+
+  return (
+    permissions.includes(normalize(department.name)) ||
+    permissions.includes(normalize(department.id))
+  );
+};
 
 const initialForm = {
   fatherName: "",
@@ -26,179 +116,19 @@ const initialForm = {
   roll: "",
 };
 
-const normalizeText = (value) =>
-  String(value ?? "")
-    .trim()
-    .toLowerCase()
-    .replace(/\s+/g, " ");
+// --------------------------------------------------
+// Reusable Components
+// --------------------------------------------------
 
-const normalizeOptionName = normalizeText;
-
-function getName(item) {
+function Loading() {
   return (
-    item?.name ||
-    item?.className ||
-    item?.batchName ||
-    item?.departmentName ||
-    item?.title ||
-    ""
+    <div className="flex min-h-64 flex-col items-center justify-center gap-3">
+      <span className="loading loading-spinner loading-lg text-primary" />
+      <p className="text-sm text-base-content/60">
+        শিক্ষার্থীদের তথ্য লোড হচ্ছে...
+      </p>
+    </div>
   );
-}
-
-function getPhoto(student) {
-  return (
-    student?.photoURL ||
-    student?.photoUrl ||
-    student?.imageUrl ||
-    student?.photo ||
-    student?.image ||
-    student?.profileImage ||
-    ""
-  );
-}
-
-function getFatherName(student) {
-  return (
-    student?.fatherName ||
-    student?.father ||
-    student?.fathersName ||
-    student?.father_name ||
-    ""
-  );
-}
-
-function getMotherName(student) {
-  return (
-    student?.motherName ||
-    student?.mother ||
-    student?.mothersName ||
-    student?.mother_name ||
-    ""
-  );
-}
-
-function getPhone(student) {
-  return String(
-    student?.phone || student?.mobile || student?.guardianPhone || "",
-  ).trim();
-}
-
-function getRole(profile, email) {
-  if (normalizeText(email) === normalizeText(SUPERADMIN_EMAIL)) {
-    return "admin";
-  }
-
-  const role = normalizeText(profile?.role).replace(/[\s-]+/g, "_");
-
-  if (["admin", "superadmin"].includes(role)) return "admin";
-
-  if (
-    [
-      "department_head",
-      "departmenthead",
-      "head",
-      "বিভাগীয় প্রধান",
-      "বিভাগীয় প্রধান",
-    ].includes(role)
-  ) {
-    return "departmentHead";
-  }
-
-  if (["teacher", "শিক্ষক", "শিক্ষিকা"].includes(role)) {
-    return "teacher";
-  }
-
-  return role;
-}
-
-function normalizeId(value) {
-  const text = String(value ?? "").trim();
-  return /^\d+$/.test(text) ? String(Number(text)) : text;
-}
-
-function getDepartmentPermissions(profile) {
-  const values = [
-    ...(Array.isArray(profile?.departmentIds) ? profile.departmentIds : []),
-    ...(Array.isArray(profile?.departments)
-      ? profile.departments.map((item) =>
-          typeof item === "object"
-            ? (item.departmentId ?? item.id ?? item.name)
-            : item,
-        )
-      : []),
-  ];
-
-  if (profile?.departmentId != null) {
-    values.push(profile.departmentId);
-  }
-
-  if (profile?.department?.id != null) {
-    values.push(profile.department.id);
-  }
-
-  if (profile?.department?.departmentId != null) {
-    values.push(profile.department.departmentId);
-  }
-
-  if (profile?.departmentName) {
-    values.push(profile.departmentName);
-  }
-
-  if (profile?.department?.name) {
-    values.push(profile.department.name);
-  }
-
-  return [
-    ...new Set(
-      values.map((value) => String(value ?? "").trim()).filter(Boolean),
-    ),
-  ];
-}
-
-function isStudentEnabled(student) {
-  const inactiveValues = [
-    "disabled",
-    "pending",
-    "inactive",
-    "blocked",
-    "suspended",
-    "false",
-    "0",
-  ];
-
-  return !(
-    student?.isActive === false ||
-    student?.isActive === 0 ||
-    student?.isActive === "false" ||
-    student?.isActive === "0" ||
-    student?.active === false ||
-    student?.enabled === false ||
-    student?.approved === false ||
-    inactiveValues.includes(normalizeText(student?.status))
-  );
-}
-
-function isToplineCareStudent(student) {
-  const careName = normalizeText(departments.CARE.name);
-  const studentDepartment = normalizeText(
-    student?.departmentName ||
-      (typeof student?.department === "string" ? student.department : ""),
-  );
-
-  return (
-    student?.isCare === true ||
-    studentDepartment === careName ||
-    studentDepartment.includes("টপলাইন কেয়ার") ||
-    studentDepartment.includes("টপলাইন কেয়ার") ||
-    studentDepartment.includes("care")
-  );
-}
-
-function getInitials(name) {
-  return String(name || "?")
-    .trim()
-    .slice(0, 2)
-    .toUpperCase();
 }
 
 function StudentAvatar({ student }) {
@@ -210,17 +140,17 @@ function StudentAvatar({ student }) {
   }, [photo]);
 
   return (
-    <div className="flex h-12 w-12 shrink-0 items-center justify-center overflow-hidden rounded-xl bg-primary/10 text-base font-bold text-primary ring-1 ring-primary/10">
+    <div className="flex h-12 w-12 shrink-0 items-center justify-center overflow-hidden rounded-2xl bg-primary/10 font-bold text-primary ring-1 ring-primary/10">
       {photo && !imageError ? (
         <img
           src={photo}
-          alt={student?.name || "Student"}
-          className="h-full w-full object-cover"
+          alt={student.name}
           loading="lazy"
+          className="h-full w-full object-cover"
           onError={() => setImageError(true)}
         />
       ) : (
-        getInitials(student?.name)
+        getInitials(student.name)
       )}
     </div>
   );
@@ -235,42 +165,87 @@ function Info({ label, value }) {
   );
 }
 
-function LoadingSpinner({ text = "লোড হচ্ছে..." }) {
-  return (
-    <div className="flex min-h-64 flex-col items-center justify-center gap-3">
-      <span className="loading loading-spinner loading-lg text-primary" />
-      <p className="text-sm text-base-content/60">{text}</p>
-    </div>
+// --------------------------------------------------
+// Batch Mark Processing
+// --------------------------------------------------
+
+async function processBatchMarks(batchId, amount, mode) {
+  // batchId দিয়ে শুধু নির্বাচিত ব্যাচের শিক্ষার্থী খোঁজা হবে।
+  // Attendance collection নয়, students collection update হবে।
+
+  const studentsQuery = query(
+    collection(db, "students"),
+    where("batchId", "==", batchId),
   );
+
+  const snapshot = await getDocs(studentsQuery);
+
+  if (snapshot.empty) {
+    throw new Error("এই ব্যাচে কোনো শিক্ষার্থী পাওয়া যায়নি।");
+  }
+
+  // অতিরিক্ত নিরাপত্তা: TopLine Care-এর শিক্ষার্থী ছাড়া অন্য কাউকে
+  // update করা হবে না।
+
+  const documents = snapshot.docs.filter((item) => isCareStudent(item.data()));
+
+  if (!documents.length) {
+    throw new Error("এই ব্যাচে TopLine Care-এর শিক্ষার্থী পাওয়া যায়নি।");
+  }
+
+  // Firestore batch write limit 500.
+  // নিরাপত্তার জন্য প্রতি batch-এ 450টি write.
+
+  for (let i = 0; i < documents.length; i += 450) {
+    const batch = writeBatch(db);
+
+    documents.slice(i, i + 450).forEach((studentDoc) => {
+      const studentRef = doc(db, "students", studentDoc.id);
+
+      batch.update(studentRef, {
+        currentMark: mode === "reset" ? 0 : increment(amount),
+
+        currentMarkPeriod: `care:${batchId}`,
+
+        currentMarkUpdatedAt: serverTimestamp(),
+      });
+    });
+
+    await batch.commit();
+  }
+
+  return documents.length;
 }
 
-function hasDepartmentPermission(permissionValues, department) {
-  const permissionNames = permissionValues.map(normalizeText);
-
-  return (
-    permissionNames.includes(normalizeId(department.id)) ||
-    permissionNames.includes(normalizeText(department.name)) ||
-    permissionNames.includes(normalizeText(department.key))
-  );
-}
+// --------------------------------------------------
+// Main Component
+// --------------------------------------------------
 
 export default function Students() {
   const navigate = useNavigate();
 
+  // Authentication
   const [profile, setProfile] = useState(null);
   const [role, setRole] = useState("");
+
+  // Department
+  const [departmentsList, setDepartmentsList] = useState([]);
   const [departmentPermissions, setDepartmentPermissions] = useState([]);
 
-  const [departmentsList, setDepartmentsList] = useState([]);
+  // Students
   const [students, setStudents] = useState([]);
 
+  // Filters
   const [departmentName, setDepartmentName] = useState("");
   const [classBatchName, setClassBatchName] = useState("");
   const [search, setSearch] = useState("");
 
+  // Loading
   const [loading, setLoading] = useState(true);
   const [updatingId, setUpdatingId] = useState("");
+  const [batchActionLoading, setBatchActionLoading] = useState(false);
 
+  // Edit Profile
   const [editingStudent, setEditingStudent] = useState(null);
   const [editForm, setEditForm] = useState(initialForm);
   const [editPhoto, setEditPhoto] = useState(null);
@@ -280,13 +255,28 @@ export default function Students() {
   const [uploadingPhoto, setUploadingPhoto] = useState(false);
   const [deletingPhoto, setDeletingPhoto] = useState(false);
 
-  const isAdmin = role === "admin";
-  const isDepartmentHead = role === "departmentHead";
-  const canManageStudents = isAdmin || isDepartmentHead;
-  const hasAccess = canManageStudents || role === "teacher";
+  // --------------------------------------------------
+  // Permissions.js Compatibility
+  // --------------------------------------------------
+
+  const isAdminUser = role === "admin";
+  const isDepartmentHeadUser = role === "departmenthead";
+  const isTeacher = role === "teacher";
+  const isExamControllerUser = role === "exam-controller";
+
+  const canViewStudents = isAdminUser || isDepartmentHeadUser || isTeacher;
+
+  const canManageStudents = isAdminUser || isDepartmentHeadUser;
+
+  // Batch mark শুধু Admin পরিচালনা করবেন।
+  const canManageBatchMarks = isAdminUser;
+
   const profileBusy = savingProfile || uploadingPhoto || deletingPhoto;
 
-  // Load profile, departments from config, and students from Firestore.
+  // --------------------------------------------------
+  // Authentication & Initial Data
+  // --------------------------------------------------
+
   useEffect(() => {
     let active = true;
 
@@ -298,103 +288,132 @@ export default function Students() {
       if (!user) {
         setProfile(null);
         setRole("");
-        setDepartmentPermissions([]);
-        setDepartmentsList([]);
         setStudents([]);
+        setDepartmentsList([]);
+        setDepartmentPermissions([]);
         setLoading(false);
         return;
       }
 
       try {
-        const profileSnapshot = await getDoc(doc(db, "users", user.uid));
+        // Admin-এর জন্য Firestore profile বাধ্যতামূলক নয়।
+        // permissions.js-এর email allowlist থেকেই Admin নির্ধারিত হবে।
 
-        if (!active) return;
+        const admin = isAdmin(user.email);
+        const departmentHead = isDepartmentHead(user.email);
+        const examController = isExamController(user.email);
 
-        const userProfile = profileSnapshot.exists()
-          ? profileSnapshot.data()
-          : {};
+        let userProfile = {};
 
-        const userRole = getRole(userProfile, user.email);
-        const allowedDepartmentValues = getDepartmentPermissions(userProfile);
+        if (!admin) {
+          const profileSnapshot = await getDoc(doc(db, "users", user.uid));
 
-        const accountDisabled =
-          userRole !== "admin" &&
-          (userProfile.accountAccess === false ||
-            userProfile.isActive === false);
+          userProfile = profileSnapshot.exists() ? profileSnapshot.data() : {};
+        }
 
-        if (
-          !["admin", "departmentHead", "teacher"].includes(userRole) ||
-          accountDisabled ||
-          (userRole !== "admin" && allowedDepartmentValues.length === 0)
-        ) {
+        const currentUser = {
+          ...userProfile,
+          email: user.email,
+        };
+
+        const userRole = getUserRole(currentUser);
+
+        const finalRole = admin
+          ? "admin"
+          : departmentHead
+            ? "departmenthead"
+            : examController
+              ? "exam-controller"
+              : userRole;
+
+        // Account access check
+        const disabled =
+          userProfile.accountAccess === false || userProfile.isActive === false;
+
+        if (!admin && disabled) {
+          if (!active) return;
+
           setProfile(userProfile);
-          setRole(userRole);
-          setDepartmentPermissions([]);
-          setDepartmentsList([]);
+          setRole("");
           setStudents([]);
+          setDepartmentsList([]);
+          setLoading(false);
+
+          toast.error("আপনার অ্যাকাউন্ট নিষ্ক্রিয়।");
+          return;
+        }
+
+        if (!["admin", "departmenthead", "teacher"].includes(finalRole)) {
+          if (!active) return;
+
+          setProfile(userProfile);
+          setRole(finalRole);
+          setStudents([]);
+          setDepartmentsList([]);
           setLoading(false);
           return;
         }
 
-        // Department/class/batch names come from departments.js.
+        const permissions = getDepartmentPermissions(userProfile);
+
         const configuredDepartments = Object.values(departments);
 
-        const permittedDepartments =
-          userRole === "admin"
-            ? configuredDepartments
-            : configuredDepartments.filter((department) =>
-                hasDepartmentPermission(allowedDepartmentValues, department),
-              );
+        const allowedDepartments = admin
+          ? configuredDepartments
+          : configuredDepartments.filter((department) =>
+              hasDepartmentPermission(department, permissions),
+            );
 
-        // Only students are loaded from Firestore.
+        if (!admin && allowedDepartments.length === 0) {
+          if (!active) return;
+
+          setProfile(userProfile);
+          setRole(finalRole);
+          setStudents([]);
+          setDepartmentsList([]);
+          setLoading(false);
+
+          toast.error("আপনার কোনো বিভাগে অনুমতি নেই।");
+          return;
+        }
+
+        // Students
         const studentSnapshot = await getDocs(collection(db, "students"));
 
-        if (!active) return;
-
-        const studentData = studentSnapshot.docs.map((item) => ({
+        const allStudents = studentSnapshot.docs.map((item) => ({
           ...item.data(),
           id: item.id,
         }));
 
-        const permittedDepartmentNames = new Set(
-          permittedDepartments.map((department) =>
-            normalizeOptionName(department.name),
-          ),
+        const allowedDepartmentNames = new Set(
+          allowedDepartments.map((item) => normalize(item.name)),
         );
 
-        const allowedStudents =
-          userRole === "admin"
-            ? studentData
-            : studentData.filter((student) =>
-                permittedDepartmentNames.has(
-                  normalizeOptionName(student.departmentName),
-                ),
-              );
+        const allowedStudents = admin
+          ? allStudents
+          : allStudents.filter((student) =>
+              allowedDepartmentNames.has(normalize(student.departmentName)),
+            );
+
+        if (!active) return;
 
         setProfile(userProfile);
-        setRole(userRole);
-        setDepartmentPermissions(allowedDepartmentValues);
-        setDepartmentsList(permittedDepartments);
+        setRole(finalRole);
+        setDepartmentPermissions(permissions);
+        setDepartmentsList(allowedDepartments);
         setStudents(allowedStudents);
 
-        if (userRole !== "admin" && permittedDepartments.length === 1) {
-          setDepartmentName(permittedDepartments[0].name);
-        } else {
-          setDepartmentName("");
-        }
+        // একটিমাত্র বিভাগ অনুমোদিত হলে সেটি স্বয়ংক্রিয়ভাবে select হবে।
+        setDepartmentName(
+          !admin && allowedDepartments.length === 1
+            ? allowedDepartments[0].name
+            : "",
+        );
 
         setClassBatchName("");
       } catch (error) {
         console.error("Students loading error:", error);
         toast.error("শিক্ষার্থীদের তথ্য লোড করা যায়নি।");
-
-        if (active) {
-          setProfile(null);
-          setRole("");
-          setDepartmentPermissions([]);
-          setDepartmentsList([]);
-          setStudents([]);
-        }
       } finally {
         if (active) setLoading(false);
       }
@@ -406,129 +425,229 @@ export default function Students() {
     };
   }, []);
 
-  // Classes and batches are configured in departments.js.
-  const classBatchOptions = useMemo(() => {
-    if (!departmentName) return [];
+  // --------------------------------------------------
+  // Department & Batch
+  // --------------------------------------------------
 
-    const selectedDepartment = departmentsList.find(
-      (department) =>
-        normalizeOptionName(department.name) ===
-        normalizeOptionName(departmentName),
+  const selectedDepartment = useMemo(
+    () =>
+      departmentsList.find(
+        (item) => normalize(item.name) === normalize(departmentName),
+      ),
+    [departmentsList, departmentName],
+  );
+
+  const classBatchOptions = useMemo(
+    () => selectedDepartment?.classes || [],
+    [selectedDepartment],
+  );
+
+  const selectedBatch = useMemo(() => {
+    if (!selectedDepartment || selectedDepartment.type !== "batch") {
+      return null;
+    }
+
+    const batch = classBatchOptions.find(
+      (item) => normalize(item.name) === normalize(classBatchName),
     );
 
-    if (!selectedDepartment) return [];
+    if (!batch) return null;
 
-    return (selectedDepartment.classes || []).map((item) => ({
-      name: item.name,
-      type: selectedDepartment.type === "batch" ? "batch" : "class",
-    }));
-  }, [departmentsList, departmentName]);
+    return {
+      id: batch.id || batch.batchId,
+      name: batch.name,
+    };
+  }, [selectedDepartment, classBatchOptions, classBatchName]);
+
+  // --------------------------------------------------
+  // Student Filtering
+  // --------------------------------------------------
 
   const filteredStudents = useMemo(() => {
-    const keyword = normalizeText(search);
-    const selectedDepartment = normalizeOptionName(departmentName);
-    const selectedClassBatch = normalizeOptionName(classBatchName);
+    const keyword = normalize(search);
 
     return students.filter((student) => {
-      // Match department by its name, not departmentId.
-      const studentDepartment = normalizeOptionName(
-        student.departmentName ||
-          (typeof student.department === "string"
-            ? student.department
-            : student.department?.name),
-      );
-
       const matchesDepartment =
-        !selectedDepartment || studentDepartment === selectedDepartment;
+        !departmentName ||
+        normalize(student.departmentName) === normalize(departmentName);
 
-      const studentClassName = normalizeOptionName(
-        student.className || student.class,
-      );
+      const matchesClass =
+        !classBatchName ||
+        normalize(student.className) === normalize(classBatchName) ||
+        normalize(student.batchName) === normalize(classBatchName);
 
-      const studentBatchName = normalizeOptionName(
-        student.batchName || student.batch,
-      );
-
-      const matchesClassBatch =
-        !selectedClassBatch ||
-        studentClassName === selectedClassBatch ||
-        studentBatchName === selectedClassBatch;
-
-      const searchableText = [
+      const searchable = [
         student.name,
+        student.studentName,
         student.studentId,
         student.phone,
         student.mobile,
         getFatherName(student),
-        getMotherName(student),
         student.villageName,
         student.className,
-        student.class,
         student.batchName,
-        student.batch,
         student.departmentName,
       ]
-        .map(normalizeText)
+        .map(normalize)
         .join(" ");
 
       return (
         matchesDepartment &&
-        matchesClassBatch &&
-        (!keyword || searchableText.includes(keyword))
+        matchesClass &&
+        (!keyword || searchable.includes(keyword))
       );
     });
   }, [students, departmentName, classBatchName, search]);
 
-  const enabledCount = filteredStudents.filter(isStudentEnabled).length;
+  const activeCount = filteredStudents.filter(isStudentActive).length;
+
+  // --------------------------------------------------
+  // Batch Mark Actions
+  // --------------------------------------------------
+
+  async function handleBatchMarkAction(mode) {
+    if (!canManageBatchMarks) {
+      toast.error("শুধু Admin এই কাজটি করতে পারবেন।");
+      return;
+    }
+
+    if (!selectedBatch?.id || batchActionLoading) {
+      if (!selectedBatch?.id) {
+        toast.error("ব্যাচের ID পাওয়া যায়নি।");
+      }
+      return;
+    }
+
+    let amount = 0;
+
+    if (mode === "add") {
+      const inputResult = await Swal.fire({
+        title: "মার্ক যোগ করুন",
+        input: "number",
+        inputLabel: `${selectedBatch.name} ব্যাচের প্রত্যেক শিক্ষার্থীর সঙ্গে কত মার্ক যোগ করবেন?`,
+        inputPlaceholder: "যেমন: 2",
+        inputAttributes: {
+          min: 1,
+          step: 1,
+        },
+        showCancelButton: true,
+        confirmButtonText: "মার্ক যোগ করুন",
+        cancelButtonText: "বাতিল",
+        confirmButtonColor: "#2563eb",
+        inputValidator: (value) => {
+          if (!value || !Number.isInteger(Number(value)) || Number(value) < 1) {
+            return "সঠিক পূর্ণসংখ্যা লিখুন।";
+          }
+        },
+      });
+
+      if (!inputResult.isConfirmed) return;
+
+      amount = Number(inputResult.value);
+    }
+
+    const isReset = mode === "reset";
+
+    const confirmation = await Swal.fire({
+      title: isReset
+        ? "ব্যাচের মার্ক Reset করবেন?"
+        : "ব্যাচের মার্ক যোগ করবেন?",
+
+      html: `
+        <div style="font-size:14px;line-height:1.8">
+          <b>${selectedBatch.name}</b><br/>
+          ${
+            isReset
+              ? "এই ব্যাচের সকল শিক্ষার্থীর Current Mark শূন্য করা হবে।"
+              : `প্রত্যেক শিক্ষার্থীর বর্তমান মার্কের সঙ্গে <b>${amount}</b> যোগ হবে।`
+          }
+          <br/><br/>
+          <span style="color:#dc2626">
+            এই কাজটি শুধু নির্বাচিত ব্যাচে কার্যকর হবে।
+          </span>
+        </div>
+      `,
+
+      icon: "warning",
+      showCancelButton: true,
+      confirmButtonText: isReset ? "হ্যাঁ, Reset করুন" : "হ্যাঁ, যোগ করুন",
+      cancelButtonText: "বাতিল",
+      confirmButtonColor: isReset ? "#dc2626" : "#2563eb",
+      reverseButtons: true,
+    });
+
+    if (!confirmation.isConfirmed) return;
+
+    setBatchActionLoading(true);
+
+    const loadingToast = toast.loading("মার্ক আপডেট হচ্ছে...");
+
+    try {
+      const count = await processBatchMarks(selectedBatch.id, amount, mode);
+
+      // Local state update
+      setStudents((previous) =>
+        previous.map((student) => {
+          if (
+            String(student.batchId) !== String(selectedBatch.id) ||
+            !isCareStudent(student)
+          ) {
+            return student;
+          }
+
+          return {
+            ...student,
+            currentMark:
+              mode === "reset"
+                ? 0
+                : (Number(student.currentMark) || 0) + amount,
+            currentMarkPeriod: `care:${selectedBatch.id}`,
+          };
+        }),
+      );
+
+      toast.dismiss(loadingToast);
+
+      await Swal.fire({
+        title: "সফল হয়েছে!",
+        text: `${count} জন শিক্ষার্থীর মার্ক ${
+          isReset ? "Reset করা হয়েছে।" : "আপডেট করা হয়েছে।"
+        }`,
+        icon: "success",
+        confirmButtonText: "ঠিক আছে",
+      });
+    } catch (error) {
+      console.error("Batch mark error:", error);
+
+      toast.dismiss(loadingToast);
+
+      toast.error(error.message || "মার্ক আপডেট করা যায়নি।");
+    } finally {
+      setBatchActionLoading(false);
+    }
+  }
+
+  // --------------------------------------------------
+  // Student Active / Inactive
+  // --------------------------------------------------
 
   async function handleToggleStatus(student) {
-    if (!canManageStudents) {
-      toast.error("এই কাজের অনুমতি আপনার নেই।");
-      return;
-    }
+    if (!canManageStudents || updatingId) return;
 
-    const studentDepartment = departmentsList.find(
-      (department) =>
-        normalizeOptionName(department.name) ===
-        normalizeOptionName(student.departmentName),
-    );
-
-    if (
-      !isAdmin &&
-      (!studentDepartment ||
-        !hasDepartmentPermission(departmentPermissions, studentDepartment))
-    ) {
-      toast.error("এই শিক্ষার্থী পরিচালনার অনুমতি নেই।");
-      return;
-    }
-
-    if (updatingId) return;
-
-    const nextEnabled = !isStudentEnabled(student);
+    const currentlyActive = isStudentActive(student);
+    const newStatus = !currentlyActive;
 
     const result = await Swal.fire({
-      title: nextEnabled
+      title: newStatus
         ? "শিক্ষার্থী সক্রিয় করবেন?"
         : "শিক্ষার্থী নিষ্ক্রিয় করবেন?",
-      text: `${student.name || "এই শিক্ষার্থী"}-এর অ্যাকাউন্ট ${
-        nextEnabled ? "সক্রিয়" : "নিষ্ক্রিয়"
-      } করা হবে।`,
+
+      text: student.name,
       icon: "question",
       showCancelButton: true,
-      confirmButtonText: nextEnabled
-        ? "হ্যাঁ, সক্রিয় করুন"
-        : "হ্যাঁ, নিষ্ক্রিয় করুন",
+      confirmButtonText: "নিশ্চিত করুন",
       cancelButtonText: "বাতিল",
       reverseButtons: true,
-      buttonsStyling: false,
-      customClass: {
-        popup:
-          "rounded-2xl border border-base-300 bg-base-100 text-base-content",
-        title: "text-base-content",
-        htmlContainer: "text-base-content/70",
-        confirmButton: "btn btn-primary mx-1",
-        cancelButton: "btn btn-ghost mx-1",
-      },
     });
 
     if (!result.isConfirmed) return;
@@ -537,9 +656,8 @@ export default function Students() {
 
     try {
       await updateDoc(doc(db, "students", student.id), {
-        isActive: nextEnabled,
-        approved: nextEnabled ? true : student.approved === true,
-        status: nextEnabled ? "approved" : "disabled",
+        isActive: newStatus,
+        status: newStatus ? "approved" : "disabled",
         updatedAt: serverTimestamp(),
         updatedBy: auth.currentUser?.uid || "",
       });
@@ -549,72 +667,38 @@ export default function Students() {
           item.id === student.id
             ? {
                 ...item,
-                isActive: nextEnabled,
-                approved: nextEnabled ? true : item.approved === true,
-                status: nextEnabled ? "approved" : "disabled",
+                isActive: newStatus,
+                status: newStatus ? "approved" : "disabled",
               }
             : item,
         ),
       );
 
-      toast.success(
-        nextEnabled
-          ? "শিক্ষার্থী সক্রিয় হয়েছে।"
-          : "শিক্ষার্থী নিষ্ক্রিয় হয়েছে।",
-      );
+      toast.success("Status আপডেট হয়েছে।");
     } catch (error) {
-      console.error("Student status update error:", error);
-      toast.error("শিক্ষার্থীর Status পরিবর্তন করা যায়নি।");
+      console.error(error);
+      toast.error("Status পরিবর্তন করা যায়নি।");
     } finally {
       setUpdatingId("");
     }
   }
 
+  // --------------------------------------------------
+  // Make CR
+  // --------------------------------------------------
+
   async function handleMakeCR(student) {
-    if (!canManageStudents) {
-      toast.error("এই কাজের অনুমতি আপনার নেই।");
+    if (!canManageStudents || !isCareStudent(student) || updatingId) {
       return;
     }
-
-    if (!isToplineCareStudent(student)) {
-      toast.error("শুধু টপলাইন কেয়ারের শিক্ষার্থীকে CR করা যাবে।");
-      return;
-    }
-
-    const studentDepartment = departmentsList.find(
-      (department) =>
-        normalizeOptionName(department.name) ===
-        normalizeOptionName(student.departmentName),
-    );
-
-    if (
-      !isAdmin &&
-      (!studentDepartment ||
-        !hasDepartmentPermission(departmentPermissions, studentDepartment))
-    ) {
-      toast.error("এই শিক্ষার্থী পরিচালনার অনুমতি নেই।");
-      return;
-    }
-
-    if (student.isCR === true || updatingId) return;
 
     const result = await Swal.fire({
-      title: "CR নির্বাচন করবেন?",
-      text: `${student.name || "এই শিক্ষার্থী"}-কে CR হিসেবে চিহ্নিত করা হবে।`,
+      title: "Make CR?",
+      text: `${student.name}-কে CR নির্বাচন করবেন?`,
       icon: "question",
       showCancelButton: true,
-      confirmButtonText: "হ্যাঁ, Make CR",
+      confirmButtonText: "হ্যাঁ",
       cancelButtonText: "বাতিল",
-      reverseButtons: true,
-      buttonsStyling: false,
-      customClass: {
-        popup:
-          "rounded-2xl border border-base-300 bg-base-100 text-base-content",
-        title: "text-base-content",
-        htmlContainer: "text-base-content/70",
-        confirmButton: "btn btn-primary mx-1",
-        cancelButton: "btn btn-ghost mx-1",
-      },
     });
 
     if (!result.isConfirmed) return;
@@ -634,33 +718,31 @@ export default function Students() {
         ),
       );
 
-      toast.success(`${student.name || "শিক্ষার্থী"} এখন CR।`);
+      toast.success("CR নির্বাচন করা হয়েছে।");
     } catch (error) {
-      console.error("Make CR error:", error);
-      toast.error("CR হিসেবে চিহ্নিত করা যায়নি।");
+      console.error(error);
+      toast.error("CR নির্বাচন করা যায়নি।");
     } finally {
       setUpdatingId("");
     }
   }
 
-  function openEditProfile(student) {
-    if (!canManageStudents) {
-      toast.error("প্রোফাইল সম্পাদনার অনুমতি আপনার নেই।");
-      return;
-    }
+  // --------------------------------------------------
+  // Edit Profile
+  // --------------------------------------------------
 
-    const studentDepartment = departmentsList.find(
-      (department) =>
-        normalizeOptionName(department.name) ===
-        normalizeOptionName(student.departmentName),
+  function openEditProfile(student) {
+    if (!canManageStudents) return;
+
+    const department = departmentsList.find(
+      (item) => normalize(item.name) === normalize(student.departmentName),
     );
 
     if (
-      !isAdmin &&
-      (!studentDepartment ||
-        !hasDepartmentPermission(departmentPermissions, studentDepartment))
+      !isAdminUser &&
+      !hasDepartmentPermission(department, departmentPermissions)
     ) {
-      toast.error("এই শিক্ষার্থী সম্পাদনার অনুমতি নেই।");
+      toast.error("এই শিক্ষার্থীর তথ্য সম্পাদনার অনুমতি নেই।");
       return;
     }
 
@@ -668,10 +750,10 @@ export default function Students() {
 
     setEditForm({
       fatherName: getFatherName(student),
-      motherName: getMotherName(student),
+      motherName: student.motherName || student.mother || "",
       dateOfBirth: student.dateOfBirth || "",
       religion: student.religion || "",
-      roll: student.roll == null ? "" : String(student.roll),
+      roll: String(student.roll ?? ""),
     });
 
     setEditPhoto(null);
@@ -712,12 +794,12 @@ export default function Students() {
     }
 
     if (file.size > 5 * 1024 * 1024) {
-      toast.error("ছবির সাইজ সর্বোচ্চ ৫ MB হতে পারবে।");
+      toast.error("ছবি সর্বোচ্চ ৫ MB হতে পারবে।");
       return;
     }
 
     if (editPreview) {
-      toast.error("নতুন ছবি দেওয়ার আগে আগের ছবিটি মুছুন।");
+      toast.error("আগের ছবি মুছে নতুন ছবি নির্বাচন করুন।");
       return;
     }
 
@@ -725,142 +807,61 @@ export default function Students() {
     setEditPreview(URL.createObjectURL(file));
   }
 
+  // --------------------------------------------------
+  // Image Resize
+  // --------------------------------------------------
+
   async function resizeImage(file) {
-    const objectUrl = URL.createObjectURL(file);
+    const url = URL.createObjectURL(file);
     const image = new Image();
 
     try {
       await new Promise((resolve, reject) => {
         image.onload = resolve;
-        image.onerror = () => reject(new Error("ছবিটি পড়া যায়নি।"));
-        image.src = objectUrl;
+        image.onerror = reject;
+        image.src = url;
       });
 
       const canvas = document.createElement("canvas");
+
       canvas.width = 200;
       canvas.height = 200;
 
+      const size = Math.min(image.width, image.height);
+
       const context = canvas.getContext("2d");
 
-      if (!context) {
-        throw new Error("ছবি প্রসেস করা যাচ্ছে না।");
-      }
-
-      const size = Math.min(image.width, image.height);
-      const sx = (image.width - size) / 2;
-      const sy = (image.height - size) / 2;
-
-      context.drawImage(image, sx, sy, size, size, 0, 0, 200, 200);
+      context.drawImage(
+        image,
+        (image.width - size) / 2,
+        (image.height - size) / 2,
+        size,
+        size,
+        0,
+        0,
+        200,
+        200,
+      );
 
       return await new Promise((resolve, reject) => {
         canvas.toBlob(
-          (blob) => {
-            if (blob) {
-              resolve(blob);
-            } else {
-              reject(new Error("ছবি রিসাইজ করা যায়নি।"));
-            }
-          },
+          (blob) =>
+            blob ? resolve(blob) : reject(new Error("ছবি Resize করা যায়নি।")),
           "image/jpeg",
           0.9,
         );
       });
     } finally {
-      URL.revokeObjectURL(objectUrl);
+      URL.revokeObjectURL(url);
     }
   }
 
-  async function handleDeleteEditPhoto() {
-    if (!editingStudent || profileBusy || !editPreview) return;
-
-    const result = await Swal.fire({
-      title: "আগের ছবি মুছবেন?",
-      text: "ছবি মুছে ফেলার পর নতুন ছবি নির্বাচন করতে পারবেন।",
-      icon: "warning",
-      showCancelButton: true,
-      confirmButtonText: "হ্যাঁ, মুছুন",
-      cancelButtonText: "বাতিল",
-      reverseButtons: true,
-      buttonsStyling: false,
-      customClass: {
-        popup:
-          "rounded-2xl border border-base-300 bg-base-100 text-base-content",
-        title: "text-base-content",
-        htmlContainer: "text-base-content/70",
-        confirmButton: "btn btn-error mx-1",
-        cancelButton: "btn btn-ghost mx-1",
-      },
-    });
-
-    if (!result.isConfirmed) return;
-
-    setDeletingPhoto(true);
-
-    try {
-      if (editPhoto) {
-        URL.revokeObjectURL(editPreview);
-        setEditPhoto(null);
-        setEditPreview("");
-        toast.success("নির্বাচিত ছবি সরানো হয়েছে।");
-        return;
-      }
-
-      const deleteURL = editingStudent.photoDeleteURL;
-
-      if (!deleteURL) {
-        throw new Error("ImageBB Delete URL পাওয়া যায়নি।");
-      }
-
-      const response = await fetch(deleteURL);
-
-      if (!response.ok) {
-        throw new Error("ImageBB ছবি মুছতে পারেনি।");
-      }
-
-      const clearedPhotoFields = {
-        photoURL: "",
-        photoUrl: "",
-        imageUrl: "",
-        photo: "",
-        image: "",
-        profileImage: "",
-        photoDeleteURL: "",
-        updatedAt: serverTimestamp(),
-        updatedBy: auth.currentUser?.uid || "",
-      };
-
-      await updateDoc(
-        doc(db, "students", editingStudent.id),
-        clearedPhotoFields,
-      );
-
-      setStudents((previous) =>
-        previous.map((item) =>
-          item.id === editingStudent.id
-            ? { ...item, ...clearedPhotoFields }
-            : item,
-        ),
-      );
-
-      setEditingStudent((previous) => ({
-        ...previous,
-        ...clearedPhotoFields,
-      }));
-
-      setEditPreview("");
-      setEditPhoto(null);
-
-      toast.success("আগের ছবি মুছে ফেলা হয়েছে।");
-    } catch (error) {
-      console.error("Delete profile photo error:", error);
-      toast.error(error.message || "ছবি মুছতে সমস্যা হয়েছে।");
-    } finally {
-      setDeletingPhoto(false);
-    }
-  }
+  // --------------------------------------------------
+  // Image Upload
+  // --------------------------------------------------
 
   async function uploadEditPhoto() {
-    if (!editPhoto) return null;
+    if (!editPhoto) return {};
 
     if (!IMGBB_API_KEY) {
       throw new Error("ImageBB API key পাওয়া যায়নি।");
@@ -869,10 +870,10 @@ export default function Students() {
     setUploadingPhoto(true);
 
     try {
-      const resizedBlob = await resizeImage(editPhoto);
+      const blob = await resizeImage(editPhoto);
       const body = new FormData();
 
-      body.append("image", resizedBlob, "student-profile.jpg");
+      body.append("image", blob, "student-profile.jpg");
 
       const response = await fetch(
         `https://api.imgbb.com/1/upload?key=${IMGBB_API_KEY}`,
@@ -885,7 +886,7 @@ export default function Students() {
       const result = await response.json();
 
       if (!response.ok || !result.success) {
-        throw new Error(result.error?.message || "ছবি আপলোড করা যায়নি।");
+        throw new Error("ছবি আপলোড করা যায়নি।");
       }
 
       return {
@@ -897,35 +898,95 @@ export default function Students() {
     }
   }
 
+  // --------------------------------------------------
+  // Delete Photo
+  // --------------------------------------------------
+
+  async function handleDeleteEditPhoto() {
+    if (!editingStudent || profileBusy || !editPreview) {
+      return;
+    }
+
+    const result = await Swal.fire({
+      title: "ছবি মুছবেন?",
+      text: "আগের ছবিটি মুছে যাবে।",
+      icon: "warning",
+      showCancelButton: true,
+      confirmButtonText: "হ্যাঁ, মুছুন",
+      cancelButtonText: "বাতিল",
+    });
+
+    if (!result.isConfirmed) return;
+
+    setDeletingPhoto(true);
+
+    try {
+      // নতুন ছবি নির্বাচন করে থাকলে শুধু preview বাতিল হবে।
+      if (editPhoto) {
+        URL.revokeObjectURL(editPreview);
+        setEditPhoto(null);
+        setEditPreview("");
+        return;
+      }
+
+      const deleteURL = editingStudent.photoDeleteURL;
+
+      if (!deleteURL) {
+        throw new Error("ImageBB Delete URL পাওয়া যায়নি।");
+      }
+
+      const response = await fetch(deleteURL);
+
+      if (!response.ok) {
+        throw new Error("ছবি মুছে ফেলা যায়নি।");
+      }
+
+      const cleared = {
+        photoURL: "",
+        photoUrl: "",
+        imageUrl: "",
+        photo: "",
+        image: "",
+        profileImage: "",
+        photoDeleteURL: "",
+        updatedAt: serverTimestamp(),
+      };
+
+      await updateDoc(doc(db, "students", editingStudent.id), cleared);
+
+      setStudents((previous) =>
+        previous.map((item) =>
+          item.id === editingStudent.id ? { ...item, ...cleared } : item,
+        ),
+      );
+
+      setEditingStudent((previous) => ({
+        ...previous,
+        ...cleared,
+      }));
+
+      setEditPreview("");
+    } catch (error) {
+      console.error(error);
+      toast.error(error.message || "ছবি মুছতে সমস্যা হয়েছে।");
+    } finally {
+      setDeletingPhoto(false);
+    }
+  }
+
+  // --------------------------------------------------
+  // Save Profile
+  // --------------------------------------------------
+
   async function handleSaveProfile(event) {
     event.preventDefault();
 
     if (!editingStudent || profileBusy) return;
 
-    const studentDepartment = departmentsList.find(
-      (department) =>
-        normalizeOptionName(department.name) ===
-        normalizeOptionName(editingStudent.departmentName),
-    );
-
-    if (
-      !isAdmin &&
-      (!studentDepartment ||
-        !hasDepartmentPermission(departmentPermissions, studentDepartment))
-    ) {
-      toast.error("এই শিক্ষার্থী সম্পাদনার অনুমতি নেই।");
-      return;
-    }
-
     setSavingProfile(true);
 
     try {
-      let photoData = {};
-
-      if (editPhoto) {
-        const uploaded = await uploadEditPhoto();
-        if (uploaded) photoData = uploaded;
-      }
+      const photoData = await uploadEditPhoto();
 
       const updatedData = {
         fatherName: editForm.fatherName.trim(),
@@ -933,7 +994,9 @@ export default function Students() {
         dateOfBirth: editForm.dateOfBirth,
         religion: editForm.religion,
         roll: editForm.roll.trim(),
+
         ...photoData,
+
         updatedAt: serverTimestamp(),
         updatedBy: auth.currentUser?.uid || "",
       };
@@ -946,32 +1009,27 @@ export default function Students() {
         ),
       );
 
-      toast.success("শিক্ষার্থীর প্রোফাইল আপডেট হয়েছে।");
-
-      if (editPreview.startsWith("blob:")) {
-        URL.revokeObjectURL(editPreview);
-      }
-
-      setEditingStudent(null);
-      setEditForm(initialForm);
-      setEditPhoto(null);
-      setEditPreview("");
+      toast.success("প্রোফাইল আপডেট হয়েছে।");
+      closeEditProfile();
     } catch (error) {
-      console.error("Save student profile error:", error);
+      console.error(error);
       toast.error(error.message || "প্রোফাইল আপডেট করা যায়নি।");
     } finally {
       setSavingProfile(false);
     }
   }
 
-  if (loading) {
-    return <LoadingSpinner text="শিক্ষার্থীদের তথ্য লোড হচ্ছে..." />;
-  }
+  // --------------------------------------------------
+  // Access Control
+  // --------------------------------------------------
 
-  if (!auth.currentUser || !hasAccess || !profile) {
+  if (loading) return <Loading />;
+
+  if (!auth.currentUser || !canViewStudents) {
     return (
-      <div className="mx-auto mt-12 max-w-md rounded-2xl border border-base-300 bg-base-100 p-8 text-center text-base-content">
+      <div className="mx-auto mt-12 max-w-md rounded-2xl border border-base-300 bg-base-100 p-8 text-center">
         <h2 className="text-lg font-bold">Access Denied</h2>
+
         <p className="mt-2 text-sm text-base-content/60">
           শিক্ষার্থীদের তালিকা দেখার অনুমতি নেই।
         </p>
@@ -979,64 +1037,68 @@ export default function Students() {
     );
   }
 
+  // --------------------------------------------------
+  // UI
+  // --------------------------------------------------
+
   return (
-    <main className="min-h-screen bg-base-200/50 px-3 py-4 text-base-content sm:px-5">
-      <div className="mx-auto max-w-7xl space-y-3">
-        <section className="rounded-2xl border border-base-300 bg-base-100 p-3 shadow-sm sm:p-4">
-          <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
-            <div className="flex items-center gap-2">
-              <span className="flex h-9 w-9 items-center justify-center rounded-xl bg-primary/10 text-primary">
+    <main className="min-h-screen bg-base-200/50 px-3 py-5 text-base-content sm:px-5">
+      <div className="mx-auto max-w-7xl space-y-4">
+        {/* Header & Filters */}
+
+        <section className="rounded-2xl border border-base-300 bg-base-100 p-4 shadow-sm">
+          <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
+            <div className="flex items-center gap-3">
+              <div className="flex h-11 w-11 items-center justify-center rounded-2xl bg-primary/10 text-primary">
                 <svg
                   viewBox="0 0 24 24"
                   fill="none"
                   stroke="currentColor"
                   strokeWidth="1.8"
-                  className="h-5 w-5"
-                  aria-hidden="true"
+                  className="h-6 w-6"
                 >
-                  <path
-                    strokeLinecap="round"
-                    strokeLinejoin="round"
-                    d="M16 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2m6-10a4 4 0 1 0 0-8 4 4 0 0 0 0 8Zm8-3a4 4 0 0 1 0 8m4 5v-2a4 4 0 0 0-3-3.87"
-                  />
+                  <path d="M16 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2m6-10a4 4 0 1 0 0-8 4 4 0 0 0 0 8Zm8-3a4 4 0 0 1 0 8m4 5v-2a4 4 0 0 0-3-3.87" />
                 </svg>
-              </span>
+              </div>
 
-              <div className="flex items-baseline gap-2">
-                <span className="text-sm font-bold">শিক্ষার্থী</span>
-                <span className="text-xs text-base-content/50">
-                  {filteredStudents.length} জন
-                </span>
+              <div>
+                <h1 className="text-lg font-bold">শিক্ষার্থী ব্যবস্থাপনা</h1>
+
+                <p className="text-xs text-base-content/50">
+                  মোট {filteredStudents.length} জন শিক্ষার্থী
+                </p>
               </div>
             </div>
 
-            <div className="flex items-center gap-2">
-              <div className="rounded-xl bg-base-200 px-3 py-1.5">
-                <span className="text-xs text-base-content/60">সক্রিয় </span>
-                <span className="text-sm font-bold text-success">
-                  {enabledCount}
-                </span>
+            <div className="flex gap-2">
+              <div className="rounded-xl bg-success/10 px-3 py-2">
+                <p className="text-[10px] text-base-content/60">Active</p>
+
+                <p className="text-lg font-bold text-success">{activeCount}</p>
               </div>
 
-              <div className="rounded-xl bg-base-200 px-3 py-1.5">
-                <span className="text-xs text-base-content/60">নিষ্ক্রিয় </span>
-                <span className="text-sm font-bold text-error">
-                  {filteredStudents.length - enabledCount}
-                </span>
+              <div className="rounded-xl bg-error/10 px-3 py-2">
+                <p className="text-[10px] text-base-content/60">Inactive</p>
+
+                <p className="text-lg font-bold text-error">
+                  {filteredStudents.length - activeCount}
+                </p>
               </div>
             </div>
           </div>
 
-          <div className="grid grid-cols-1 gap-2 sm:grid-cols-3">
+          {/* Filters */}
+
+          <div className="grid gap-3 sm:grid-cols-3">
             <label className="form-control">
-              <span className="mb-1 text-[11px] font-semibold text-base-content/60">
+              <span className="mb-1.5 text-xs font-semibold text-base-content/60">
                 বিভাগ
               </span>
 
               <select
-                className="select select-bordered select-sm w-full bg-base-100"
+                className="select select-bordered select-sm w-full"
                 value={departmentName}
-                disabled={!isAdmin && departmentsList.length === 1}
+                disabled={!isAdminUser && departmentsList.length === 1}
                 onChange={(event) => {
                   setDepartmentName(event.target.value);
                   setClassBatchName("");
@@ -1044,137 +1106,157 @@ export default function Students() {
               >
                 <option value="">সব অনুমোদিত বিভাগ</option>
 
-                {departmentsList.map((department) => (
-                  <option key={department.name} value={department.name}>
-                    {department.name}
+                {departmentsList.map((item) => (
+                  <option key={item.id || item.name} value={item.name}>
+                    {item.name}
                   </option>
                 ))}
               </select>
             </label>
 
             <label className="form-control">
-              <span className="mb-1 text-[11px] font-semibold text-base-content/60">
+              <span className="mb-1.5 text-xs font-semibold text-base-content/60">
                 শ্রেণি / ব্যাচ
               </span>
 
               <select
-                className="select select-bordered select-sm w-full bg-base-100"
+                className="select select-bordered select-sm w-full"
                 value={classBatchName}
                 disabled={!departmentName}
                 onChange={(event) => setClassBatchName(event.target.value)}
               >
-                <option value="">
-                  {departmentName ? "সব শ্রেণি / ব্যাচ" : "বিভাগ নির্বাচন করুন"}
-                </option>
+                <option value="">সব শ্রেণি / ব্যাচ</option>
 
                 {classBatchOptions.map((item) => (
-                  <option key={`${item.type}-${item.name}`} value={item.name}>
+                  <option key={item.id || item.name} value={item.name}>
                     {item.name}
-                    {item.type === "batch" ? " · Batch" : ""}
                   </option>
                 ))}
               </select>
             </label>
 
             <label className="form-control">
-              <span className="mb-1 text-[11px] font-semibold text-base-content/60">
-                খুঁজুন
+              <span className="mb-1.5 text-xs font-semibold text-base-content/60">
+                শিক্ষার্থী খুঁজুন
               </span>
 
               <input
                 type="search"
-                className="input input-bordered input-sm w-full bg-base-100"
                 placeholder="নাম, ID, ফোন..."
+                className="input input-bordered input-sm w-full"
                 value={search}
                 onChange={(event) => setSearch(event.target.value)}
               />
             </label>
           </div>
 
-          {(search || departmentName || classBatchName) && (
-            <div className="mt-2 flex justify-end">
-              <button
-                type="button"
-                className="btn btn-ghost btn-xs"
-                onClick={() => {
-                  setDepartmentName(
-                    !isAdmin && departmentsList.length === 1
-                      ? departmentsList[0].name
-                      : "",
-                  );
-                  setClassBatchName("");
-                  setSearch("");
-                }}
-              >
-                ফিল্টার রিসেট
-              </button>
+          {/* Batch Mark Management */}
+
+          {canManageBatchMarks && selectedBatch && (
+            <div className="mt-4 rounded-2xl border border-primary/20 bg-gradient-to-r from-primary/10 to-base-100 p-4">
+              <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+                <div>
+                  <h3 className="text-sm font-bold">
+                    ব্যাচের মার্ক ব্যবস্থাপনা
+                  </h3>
+
+                  <p className="mt-1 text-xs text-base-content/55">
+                    {selectedBatch.name} — এই ব্যাচের শিক্ষার্থীদের মার্ক
+                    পরিচালনা করুন।
+                  </p>
+                </div>
+
+                <span className="badge badge-primary badge-sm">Admin Only</span>
+              </div>
+
+              <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+                <button
+                  type="button"
+                  disabled={batchActionLoading}
+                  onClick={() => handleBatchMarkAction("add")}
+                  className="btn btn-primary btn-sm"
+                >
+                  {batchActionLoading ? (
+                    <span className="loading loading-spinner loading-xs" />
+                  ) : (
+                    "+"
+                  )}
+                  Add Batch Mark
+                </button>
+
+                <button
+                  type="button"
+                  disabled={batchActionLoading}
+                  onClick={() => handleBatchMarkAction("reset")}
+                  className="btn btn-outline btn-error btn-sm"
+                >
+                  {batchActionLoading ? (
+                    <span className="loading loading-spinner loading-xs" />
+                  ) : (
+                    "↻"
+                  )}
+                  Reset Batch Mark
+                </button>
+              </div>
             </div>
           )}
         </section>
 
+        {/* Student List */}
+
         {filteredStudents.length === 0 ? (
-          <div className="rounded-2xl border border-base-300 bg-base-100 px-5 py-12 text-center">
-            <div className="mx-auto flex h-12 w-12 items-center justify-center rounded-xl bg-base-200">
-              <svg
-                viewBox="0 0 24 24"
-                fill="none"
-                stroke="currentColor"
-                strokeWidth="1.8"
-                className="h-6 w-6 text-base-content/50"
-                aria-hidden="true"
-              >
-                <circle cx="11" cy="11" r="7" />
-                <path strokeLinecap="round" d="m16 16 4 4M8 11h6" />
-              </svg>
-            </div>
+          <div className="rounded-2xl border border-base-300 bg-base-100 p-12 text-center">
+            <h2 className="font-bold">কোনো শিক্ষার্থী পাওয়া যায়নি</h2>
 
-            <h2 className="mt-3 text-sm font-bold">
-              কোনো শিক্ষার্থী পাওয়া যায়নি
-            </h2>
-
-            <p className="mt-1 text-xs text-base-content/55">
-              সার্চ বা ফিল্টার পরিবর্তন করে দেখুন।
+            <p className="mt-1 text-xs text-base-content/50">
+              সার্চ অথবা ফিল্টার পরিবর্তন করে দেখুন।
             </p>
           </div>
         ) : (
           <section className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-3">
             {filteredStudents.map((student) => {
-              const enabled = isStudentEnabled(student);
+              const active = isStudentActive(student);
               const phone = getPhone(student);
+
               const studentRouteId = student.studentId || student.id;
-              const careStudent = isToplineCareStudent(student);
+
+              const careStudent = isCareStudent(student);
 
               return (
                 <article
                   key={student.id}
-                  className="overflow-hidden rounded-2xl border border-base-300 bg-base-100 shadow-sm transition duration-200 hover:border-primary/30 hover:shadow-md"
+                  className="overflow-hidden rounded-2xl border border-base-300 bg-base-100 shadow-sm transition hover:border-primary/30 hover:shadow-md"
                 >
-                  <div className="flex items-start gap-3 p-3">
+                  {/* Student Header */}
+
+                  <div className="flex items-start gap-3 p-4">
                     <StudentAvatar student={student} />
 
                     <div className="min-w-0 flex-1">
                       <div className="flex items-start justify-between gap-2">
                         <div className="min-w-0">
                           <h2 className="truncate text-sm font-bold">
-                            {student.name || "নাম দেওয়া হয়নি"}
+                            {student.name ||
+                              student.studentName ||
+                              "নাম দেওয়া হয়নি"}
                           </h2>
 
-                          <p className="mt-0.5 truncate font-mono text-[11px] text-primary">
+                          <p className="mt-1 font-mono text-xs text-primary">
                             ID: {studentRouteId}
                           </p>
                         </div>
 
-                        <div className="flex shrink-0 flex-wrap justify-end gap-1">
+                        <div className="flex flex-wrap gap-1">
                           <span
-                            className={`badge badge-xs ${
-                              enabled ? "badge-success" : "badge-error"
+                            className={`badge badge-sm ${
+                              active ? "badge-success" : "badge-error"
                             }`}
                           >
-                            {enabled ? "Active" : "Inactive"}
+                            {active ? "Active" : "Inactive"}
                           </span>
 
-                          {student.isCR === true && (
-                            <span className="badge badge-primary badge-xs">
+                          {student.isCR && (
+                            <span className="badge badge-primary badge-sm">
                               CR
                             </span>
                           )}
@@ -1199,39 +1281,27 @@ export default function Students() {
                             {student.batchName}
                           </span>
                         )}
-
-                        {careStudent && (
-                          <span className="badge badge-info badge-xs">
-                            Care
-                          </span>
-                        )}
-
-                        {student.isCoaching === true && (
-                          <span className="badge badge-secondary badge-xs">
-                            Coaching
-                          </span>
-                        )}
                       </div>
                     </div>
                   </div>
 
-                  <div className="grid grid-cols-2 gap-3 border-t border-base-300 px-3 py-2.5">
+                  {/* Student Information */}
+
+                  <div className="grid grid-cols-2 gap-3 border-t border-base-300 px-4 py-3">
                     <Info label="পিতার নাম" value={getFatherName(student)} />
+
                     <Info label="মোবাইল" value={phone} />
                   </div>
 
                   {canManageStudents && student.pin && (
-                    <div className="border-t border-base-300 px-3 py-2">
-                      <p className="text-[11px] text-base-content/50">
-                        PIN:{" "}
-                        <span className="font-mono font-semibold text-base-content">
-                          {student.pin}
-                        </span>
-                      </p>
+                    <div className="border-t border-base-300 px-4 py-2">
+                      <Info label="PIN" value={student.pin} />
                     </div>
                   )}
 
-                  <div className="flex gap-2 border-t border-base-300 p-2.5">
+                  {/* Main Actions */}
+
+                  <div className="flex gap-2 border-t border-base-300 p-3">
                     {phone ? (
                       <a
                         href={`tel:${phone.replace(/[^\d+]/g, "")}`}
@@ -1242,8 +1312,8 @@ export default function Students() {
                     ) : (
                       <button
                         type="button"
-                        className="btn btn-outline btn-xs flex-1"
                         disabled
+                        className="btn btn-outline btn-xs flex-1"
                       >
                         No phone
                       </button>
@@ -1251,61 +1321,49 @@ export default function Students() {
 
                     <button
                       type="button"
-                      className="btn btn-primary btn-xs flex-1"
                       onClick={() => navigate(`/student/${studentRouteId}`)}
+                      className="btn btn-primary btn-xs flex-1"
                     >
                       View Profile →
                     </button>
                   </div>
 
+                  {/* Management Actions */}
+
                   {canManageStudents && (
-                    <div className="grid grid-cols-2 gap-2 px-2.5 pb-2.5">
+                    <div className="grid grid-cols-2 gap-2 px-3 pb-3">
                       <button
                         type="button"
-                        className="btn btn-outline btn-primary btn-xs"
                         onClick={() => openEditProfile(student)}
+                        className="btn btn-outline btn-primary btn-xs"
                       >
                         Edit Profile
                       </button>
 
-                      <label
-                        className={`flex cursor-pointer items-center justify-center gap-2 rounded-lg border border-base-300 px-2 py-1.5 text-xs font-medium ${
-                          enabled ? "text-success" : "text-base-content/60"
-                        }`}
-                      >
+                      <label className="flex cursor-pointer items-center justify-center gap-2 rounded-lg border border-base-300 text-xs">
                         <input
                           type="checkbox"
                           className="toggle toggle-success toggle-xs"
-                          checked={enabled}
+                          checked={active}
                           disabled={updatingId === student.id}
                           onChange={() => handleToggleStatus(student)}
-                          aria-label={`${
-                            enabled ? "Disable" : "Enable"
-                          } ${student.name || "student"}`}
                         />
 
                         {updatingId === student.id
-                          ? "Processing..."
-                          : enabled
+                          ? "Processing"
+                          : active
                             ? "Active"
                             : "Inactive"}
                       </label>
 
-                      {careStudent && student.isCR !== true && (
+                      {careStudent && !student.isCR && (
                         <button
                           type="button"
-                          className="btn btn-outline btn-secondary btn-xs col-span-2"
                           disabled={Boolean(updatingId)}
                           onClick={() => handleMakeCR(student)}
+                          className="btn btn-outline btn-secondary btn-xs col-span-2"
                         >
-                          {updatingId === student.id ? (
-                            <>
-                              <span className="loading loading-spinner loading-xs" />
-                              Processing...
-                            </>
-                          ) : (
-                            "Make CR"
-                          )}
+                          Make CR
                         </button>
                       )}
                     </div>
@@ -1317,9 +1375,13 @@ export default function Students() {
         )}
       </div>
 
+      {/* --------------------------------------------------
+          Edit Profile Modal
+      -------------------------------------------------- */}
+
       {editingStudent && (
         <div
-          className="fixed inset-0 z-50 flex items-start justify-center overflow-y-auto bg-black/50 p-3 backdrop-blur-sm sm:items-center sm:p-6"
+          className="fixed inset-0 z-50 flex items-start justify-center overflow-y-auto bg-black/50 p-3 backdrop-blur-sm sm:items-center"
           onMouseDown={(event) => {
             if (event.target === event.currentTarget) {
               closeEditProfile();
@@ -1329,84 +1391,64 @@ export default function Students() {
           <section
             role="dialog"
             aria-modal="true"
-            aria-labelledby="edit-profile-title"
-            className="my-4 w-full max-w-2xl overflow-hidden rounded-2xl border border-base-300 bg-base-100 text-base-content shadow-2xl sm:my-8"
+            className="my-4 w-full max-w-2xl overflow-hidden rounded-2xl border border-base-300 bg-base-100 shadow-2xl"
           >
-            <div className="flex items-start justify-between gap-4 border-b border-base-300 p-4 sm:p-5">
-              <div>
-                <h2 id="edit-profile-title" className="text-lg font-bold">
-                  Edit Student Profile
-                </h2>
+            {/* Modal Header */}
 
-                <p className="mt-1 text-xs text-base-content/60">
-                  {editingStudent.name || "Student"} ·{" "}
-                  {editingStudent.studentId || editingStudent.id}
+            <div className="flex items-center justify-between border-b border-base-300 p-4">
+              <div>
+                <h2 className="font-bold">Edit Student Profile</h2>
+
+                <p className="mt-1 text-xs text-base-content/50">
+                  {editingStudent.name} · {editingStudent.studentId}
                 </p>
               </div>
 
               <button
                 type="button"
-                onClick={closeEditProfile}
                 disabled={profileBusy}
+                onClick={closeEditProfile}
                 className="btn btn-circle btn-ghost btn-sm"
-                aria-label="Close edit profile"
               >
                 ✕
               </button>
             </div>
 
             <form onSubmit={handleSaveProfile}>
-              <div className="max-h-[75vh] space-y-4 overflow-y-auto p-4 sm:p-5">
-                <div className="flex flex-col items-center rounded-xl border border-base-300 bg-base-200/30 p-4">
-                  <div className="relative">
-                    <div className="h-[160px] w-[160px] overflow-hidden rounded-full border-4 border-base-100 bg-base-200 shadow-md">
-                      {editPreview ? (
-                        <img
-                          src={editPreview}
-                          alt="Student profile"
-                          width={160}
-                          height={160}
-                          className="h-full w-full object-cover"
-                        />
-                      ) : (
-                        <div className="flex h-full w-full items-center justify-center text-4xl font-bold text-primary">
-                          {getInitials(editingStudent.name)}
-                        </div>
-                      )}
-                    </div>
+              <div className="max-h-[75vh] space-y-5 overflow-y-auto p-4">
+                {/* Profile Photo */}
 
-                    {(uploadingPhoto || deletingPhoto) && (
-                      <div className="absolute inset-0 flex flex-col items-center justify-center rounded-full bg-black/60 text-white">
-                        <span className="loading loading-spinner loading-lg" />
-                        <p className="mt-2 text-xs">
-                          {uploadingPhoto
-                            ? "ছবি আপলোড হচ্ছে..."
-                            : "ছবি মুছে ফেলা হচ্ছে..."}
-                        </p>
+                <div className="flex flex-col items-center rounded-2xl border border-base-300 bg-base-200/30 p-5">
+                  <div className="h-36 w-36 overflow-hidden rounded-full border-4 border-base-100 bg-base-200 shadow-md">
+                    {editPreview ? (
+                      <img
+                        src={editPreview}
+                        alt="Student"
+                        className="h-full w-full object-cover"
+                      />
+                    ) : (
+                      <div className="flex h-full items-center justify-center text-3xl font-bold text-primary">
+                        {getInitials(editingStudent.name)}
                       </div>
                     )}
                   </div>
 
-                  <p className="mt-2 text-xs text-base-content/60">
-                    200 × 200 pixels · সর্বোচ্চ 5 MB
+                  <p className="mt-2 text-xs text-base-content/50">
+                    200 × 200 · সর্বোচ্চ 5 MB
                   </p>
 
                   {editPreview && !editPhoto ? (
                     <button
                       type="button"
-                      className="btn btn-outline btn-error btn-xs mt-3"
                       disabled={profileBusy}
                       onClick={handleDeleteEditPhoto}
+                      className="btn btn-outline btn-error btn-xs mt-3"
                     >
-                      {deletingPhoto ? "মুছে ফেলা হচ্ছে..." : "আগের ছবি মুছুন"}
+                      {deletingPhoto ? "Deleting..." : "Delete Photo"}
                     </button>
                   ) : (
-                    <label
-                      className={`btn btn-primary btn-xs mt-3 ${
-                        profileBusy ? "pointer-events-none opacity-50" : ""
-                      }`}
-                    >
-                      ছবি নির্বাচন করুন
+                    <label className="btn btn-primary btn-xs mt-3">
+                      Select Photo
                       <input
                         type="file"
                         accept="image/*"
@@ -1418,172 +1460,97 @@ export default function Students() {
                   )}
 
                   {editPhoto && (
-                    <div className="mt-2 text-center">
-                      <p className="text-xs text-success">
-                        নতুন ছবি নির্বাচিত হয়েছে।
-                      </p>
-
-                      <button
-                        type="button"
-                        className="btn btn-ghost btn-xs mt-1"
-                        disabled={profileBusy}
-                        onClick={() => {
-                          URL.revokeObjectURL(editPreview);
-                          setEditPhoto(null);
-                          setEditPreview("");
-                        }}
-                      >
-                        ছবি বাতিল করুন
-                      </button>
-                    </div>
+                    <button
+                      type="button"
+                      className="btn btn-ghost btn-xs mt-2"
+                      disabled={profileBusy}
+                      onClick={() => {
+                        URL.revokeObjectURL(editPreview);
+                        setEditPhoto(null);
+                        setEditPreview("");
+                      }}
+                    >
+                      Cancel New Photo
+                    </button>
                   )}
-
-                  <p className="mt-2 text-center text-[11px] text-base-content/50">
-                    নতুন ছবি দিতে হলে প্রথমে আগের ছবিটি মুছুন।
-                  </p>
                 </div>
 
-                <div className="rounded-xl bg-base-200/50 p-3">
-                  <p className="text-[11px] text-base-content/50">
-                    শিক্ষার্থীর নাম
-                  </p>
+                {/* Profile Fields */}
 
-                  <p className="mt-1 text-sm font-semibold">
-                    {editingStudent.name || "—"}
-                  </p>
+                <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                  {[
+                    ["fatherName", "বাবার নাম", "text"],
+                    ["motherName", "মায়ের নাম", "text"],
+                    ["dateOfBirth", "জন্মতারিখ", "date"],
+                    ["roll", "রোল নম্বর", "text"],
+                  ].map(([name, label, type]) => (
+                    <label key={name} className="form-control">
+                      <span className="mb-1.5 text-xs font-medium">
+                        {label}
+                      </span>
 
-                  <div className="mt-3 grid grid-cols-2 gap-3">
-                    <Info
-                      label="Care"
-                      value={
-                        isToplineCareStudent(editingStudent) ? "Yes" : "No"
-                      }
-                    />
-                    <Info
-                      label="CR"
-                      value={editingStudent.isCR === true ? "Yes" : "No"}
-                    />
-                  </div>
+                      <input
+                        type={type}
+                        name={name}
+                        value={editForm[name]}
+                        onChange={handleEditChange}
+                        className="input input-bordered input-sm"
+                        disabled={profileBusy}
+                      />
+                    </label>
+                  ))}
+
+                  <label className="form-control sm:col-span-2">
+                    <span className="mb-1.5 text-xs font-medium">ধর্ম</span>
+
+                    <select
+                      name="religion"
+                      value={editForm.religion}
+                      onChange={handleEditChange}
+                      className="select select-bordered select-sm"
+                      disabled={profileBusy}
+                    >
+                      <option value="">ধর্ম নির্বাচন করুন</option>
+
+                      {[
+                        "ইসলাম",
+                        "হিন্দু",
+                        "বৌদ্ধ",
+                        "খ্রিস্টান",
+                        "অন্যান্য",
+                      ].map((item) => (
+                        <option key={item} value={item}>
+                          {item}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
                 </div>
 
-                <div>
-                  <h3 className="mb-3 text-sm font-semibold">
-                    অতিরিক্ত ব্যক্তিগত তথ্য
-                  </h3>
-
-                  <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-                    <label className="form-control">
-                      <span className="label-text mb-1.5 text-xs font-medium">
-                        বাবার নাম
-                      </span>
-                      <input
-                        type="text"
-                        name="fatherName"
-                        value={editForm.fatherName}
-                        onChange={handleEditChange}
-                        placeholder="বাবার নাম"
-                        className="input input-bordered input-sm w-full bg-base-100"
-                        disabled={profileBusy}
-                      />
-                    </label>
-
-                    <label className="form-control">
-                      <span className="label-text mb-1.5 text-xs font-medium">
-                        মায়ের নাম
-                      </span>
-                      <input
-                        type="text"
-                        name="motherName"
-                        value={editForm.motherName}
-                        onChange={handleEditChange}
-                        placeholder="মায়ের নাম"
-                        className="input input-bordered input-sm w-full bg-base-100"
-                        disabled={profileBusy}
-                      />
-                    </label>
-
-                    <label className="form-control">
-                      <span className="label-text mb-1.5 text-xs font-medium">
-                        জন্মতারিখ
-                      </span>
-                      <input
-                        type="date"
-                        name="dateOfBirth"
-                        value={editForm.dateOfBirth}
-                        onChange={handleEditChange}
-                        className="input input-bordered input-sm w-full bg-base-100"
-                        disabled={profileBusy}
-                      />
-                    </label>
-
-                    <label className="form-control">
-                      <span className="label-text mb-1.5 text-xs font-medium">
-                        ধর্ম
-                      </span>
-                      <select
-                        name="religion"
-                        value={editForm.religion}
-                        onChange={handleEditChange}
-                        className="select select-bordered select-sm w-full bg-base-100"
-                        disabled={profileBusy}
-                      >
-                        <option value="">ধর্ম নির্বাচন করুন</option>
-                        {[
-                          "ইসলাম",
-                          "হিন্দু",
-                          "বৌদ্ধ",
-                          "খ্রিস্টান",
-                          "অন্যান্য",
-                        ].map((religion) => (
-                          <option key={religion} value={religion}>
-                            {religion}
-                          </option>
-                        ))}
-                      </select>
-                    </label>
-
-                    <label className="form-control sm:col-span-2">
-                      <span className="label-text mb-1.5 text-xs font-medium">
-                        রোল নম্বর
-                      </span>
-                      <input
-                        type="text"
-                        name="roll"
-                        inputMode="numeric"
-                        value={editForm.roll}
-                        onChange={handleEditChange}
-                        placeholder="রোল নম্বর"
-                        className="input input-bordered input-sm w-full bg-base-100"
-                        disabled={profileBusy}
-                      />
-                    </label>
-                  </div>
-
-                  <p className="mt-2 text-[11px] text-base-content/50">
-                    সব তথ্য ঐচ্ছিক। কোনো ফিল্ড খালি রাখলেও সেভ করা যাবে।
-                  </p>
-                </div>
+                <p className="text-xs text-base-content/50">সব তথ্য ঐচ্ছিক।</p>
               </div>
 
-              <div className="flex flex-col-reverse gap-2 border-t border-base-300 p-3 sm:flex-row sm:justify-end sm:p-4">
+              {/* Modal Footer */}
+
+              <div className="flex flex-col-reverse justify-end gap-2 border-t border-base-300 p-4 sm:flex-row">
                 <button
                   type="button"
-                  className="btn btn-ghost btn-sm"
-                  disabled={profileBusy}
                   onClick={closeEditProfile}
+                  disabled={profileBusy}
+                  className="btn btn-ghost btn-sm"
                 >
                   বাতিল
                 </button>
 
                 <button
                   type="submit"
-                  className="btn btn-primary btn-sm min-w-36"
                   disabled={profileBusy}
+                  className="btn btn-primary btn-sm"
                 >
-                  {savingProfile || uploadingPhoto ? (
+                  {profileBusy ? (
                     <>
                       <span className="loading loading-spinner loading-xs" />
-                      {uploadingPhoto ? "ছবি আপলোড হচ্ছে..." : "সেভ হচ্ছে..."}
+                      সেভ হচ্ছে...
                     </>
                   ) : (
                     "প্রোফাইল সেভ করুন"

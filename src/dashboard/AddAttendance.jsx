@@ -7,8 +7,8 @@ import {
   getDocs,
   limit,
   query,
+  runTransaction,
   where,
-  writeBatch,
   serverTimestamp,
 } from "firebase/firestore";
 
@@ -43,6 +43,16 @@ import { calculateCurrentMark } from "../utils/calculateCurrentMark";
 ========================================================= */
 
 const STUDENT_SESSION_KEY = "studentSession";
+
+const ATTENDANCE_COLLECTION = "attendance";
+
+// Marker used to recognise the "already taken" case inside the transaction.
+const ALREADY_TAKEN = "ALREADY_TAKEN";
+
+// While old one-document-per-student attendance still exists, also look for
+// it when checking whether today's attendance was already taken.
+// Set to false after the old data has been migrated or is no longer needed.
+const CHECK_LEGACY_ATTENDANCE = true;
 
 /* =========================================================
    Helpers
@@ -88,12 +98,27 @@ const getSubmitterName = (record) =>
   record?.takenByName ||
   record?.teacherName ||
   record?.submittedByName ||
-  "নাম পাওয়া যায়নি";
+  "নাম পাওয়া যায়নি";
 
-const getAttendanceDocId = (date, departmentName, className, studentDocId) =>
-  [date, departmentName, className, studentDocId]
-    .join("_")
-    .replaceAll("/", "_");
+/**
+ * One document per class/batch per day.
+ *
+ * Example: "Care_Batch 12_2026-11-03"
+ *
+ * The department name is included because two departments can have a
+ * class with the same name (for example Academy and Coaching).
+ * To use only "<class>_<date>", remove departmentName from the list below.
+ *
+ * Firestore IDs cannot contain "/", so it is replaced with "-".
+ */
+const getAttendanceSheetId = (departmentName, className, date) =>
+  [departmentName, className, date]
+    .map((part) =>
+      String(part ?? "")
+        .trim()
+        .replaceAll("/", "-"),
+    )
+    .join("_");
 
 const getStudentGroupName = (student, department) =>
   isBatchDepartment(department)
@@ -106,6 +131,56 @@ function readStudentSession() {
   } catch {
     return null;
   }
+}
+
+/**
+ * Finds attendance that already exists for this class/batch and date.
+ *
+ * 1. The new sheet document (a single getDoc, because the ID is known).
+ * 2. Optionally, old per-student documents for the same day.
+ */
+async function fetchExistingAttendance({
+  departmentName,
+  className,
+  departmentId,
+  classId,
+  date,
+}) {
+  const found = [];
+
+  const sheetSnapshot = await getDoc(
+    doc(
+      db,
+      ATTENDANCE_COLLECTION,
+      getAttendanceSheetId(departmentName, className, date),
+    ),
+  );
+
+  if (sheetSnapshot.exists()) {
+    found.push({ docId: sheetSnapshot.id, ...sheetSnapshot.data() });
+  }
+
+  if (CHECK_LEGACY_ATTENDANCE) {
+    const legacySnapshot = await getDocs(
+      query(collection(db, ATTENDANCE_COLLECTION), where("date", "==", date)),
+    );
+
+    legacySnapshot.docs.forEach((item) => {
+      const record = item.data();
+
+      // Skip sheets and anything that is not a per-student record.
+      if (!record.studentDocId) return;
+
+      if (
+        normalizeId(record.departmentId) === departmentId &&
+        String(record.classId ?? "") === classId
+      ) {
+        found.push({ docId: item.id, ...record });
+      }
+    });
+  }
+
+  return found;
 }
 
 /* =========================================================
@@ -252,7 +327,7 @@ export default function AddAttendance() {
           if (!snapshot.exists()) {
             localStorage.removeItem(STUDENT_SESSION_KEY);
 
-            setAuthError("শিক্ষার্থীর তথ্য পাওয়া যায়নি। আবার লগইন করুন।");
+            setAuthError("শিক্ষার্থীর তথ্য পাওয়া যায়নি। আবার লগইন করুন।");
 
             return;
           }
@@ -289,7 +364,7 @@ export default function AddAttendance() {
             });
 
             setAuthError(
-              "শুধু সক্রিয় ও অনুমোদিত CR নিজের কেয়ার ব্যাচের উপস্থিতি নিতে পারবেন।",
+              "শুধু সক্রিয় ও অনুমোদিত CR নিজের কেয়ার ব্যাচের উপস্থিতি নিতে পারবেন।",
             );
 
             return;
@@ -352,7 +427,7 @@ export default function AddAttendance() {
 
         if (teacherSnapshot.empty) {
           setAuthError(
-            "শিক্ষক প্রোফাইল পাওয়া যায়নি। Admin-এর সঙ্গে যোগাযোগ করুন।",
+            "শিক্ষক প্রোফাইল পাওয়া যায়নি। Admin-এর সঙ্গে যোগাযোগ করুন।",
           );
 
           return;
@@ -366,13 +441,13 @@ export default function AddAttendance() {
         };
 
         if (teacher.isActive !== true) {
-          setAuthError("আপনার শিক্ষক অ্যাকাউন্ট সক্রিয় নয়।");
+          setAuthError("আপনার শিক্ষক অ্যাকাউন্ট সক্রিয় নয়।");
 
           return;
         }
 
         if (teacher.accountAccess !== true) {
-          setAuthError("আপনার অ্যাকাউন্টে প্রবেশের অনুমতি বন্ধ রয়েছে।");
+          setAuthError("আপনার অ্যাকাউন্টে প্রবেশের অনুমতি বন্ধ রয়েছে।");
 
           return;
         }
@@ -424,7 +499,7 @@ export default function AddAttendance() {
         console.error("Attendance authentication error:", error);
 
         if (!cancelled) {
-          setAuthError("অ্যাকাউন্ট যাচাই করা যায়নি। আবার চেষ্টা করুন।");
+          setAuthError("অ্যাকাউন্ট যাচাই করা যায়নি। আবার চেষ্টা করুন।");
         }
       } finally {
         if (!cancelled) {
@@ -537,7 +612,7 @@ export default function AddAttendance() {
     } catch (error) {
       console.error("Load students error:", error);
 
-      toast.error("শিক্ষার্থীদের তালিকা লোড করা যায়নি।");
+      toast.error("শিক্ষার্থীদের তালিকা লোড করা যায়নি।");
 
       setStudents([]);
       setAttendance({});
@@ -565,21 +640,13 @@ export default function AddAttendance() {
     setAttendanceCheckError("");
 
     try {
-      const snapshot = await getDocs(
-        query(collection(db, "attendance"), where("date", "==", date)),
-      );
-
-      const records = snapshot.docs
-        .map((item) => ({
-          docId: item.id,
-          ...item.data(),
-        }))
-        .filter(
-          (item) =>
-            normalizeId(item.departmentId) ===
-              getDepartmentId(selectedDepartment) &&
-            String(item.classId ?? "") === getClassId(selectedClass),
-        );
+      const records = await fetchExistingAttendance({
+        departmentName: selectedDepartment.name,
+        className: selectedClass.name,
+        departmentId: getDepartmentId(selectedDepartment),
+        classId: getClassId(selectedClass),
+        date,
+      });
 
       setExistingAttendance(records);
     } catch (error) {
@@ -588,7 +655,7 @@ export default function AddAttendance() {
       setExistingAttendance([]);
 
       setAttendanceCheckError(
-        "আগের উপস্থিতি যাচাই করা যায়নি। সংযোগ ও Firestore Rules পরীক্ষা করুন।",
+        "আগের উপস্থিতি যাচাই করা যায়নি। সংযোগ ও Firestore Rules পরীক্ষা করুন।",
       );
     } finally {
       setCheckingAttendance(false);
@@ -626,6 +693,12 @@ export default function AddAttendance() {
   const absentCount = students.length - presentCount;
 
   const alreadyTaken = existingAttendance.length > 0;
+
+  // A sheet counts as many students; an old per-student record counts as one.
+  const existingCount = existingAttendance.reduce(
+    (sum, item) => sum + (Number(item.totalStudents) || 1),
+    0,
+  );
 
   const takenBy = useMemo(() => {
     const record = existingAttendance.find(
@@ -689,7 +762,7 @@ export default function AddAttendance() {
 
   const handleSubmit = async () => {
     if (!canManageAttendance) {
-      toast.error("আপনার উপস্থিতি নেওয়ার অনুমতি নেই।");
+      toast.error("আপনার উপস্থিতি নেওয়ার অনুমতি নেই।");
       return;
     }
 
@@ -699,28 +772,28 @@ export default function AddAttendance() {
     }
 
     if (date > getLocalDate()) {
-      toast.error("ভবিষ্যতের তারিখে উপস্থিতি নেওয়া যাবে না।");
+      toast.error("ভবিষ্যতের তারিখে উপস্থিতি নেওয়া যাবে না।");
       return;
     }
 
     if (!students.length) {
-      toast.error("কোনো সক্রিয় শিক্ষার্থী পাওয়া যায়নি।");
+      toast.error("কোনো সক্রিয় শিক্ষার্থী পাওয়া যায়নি।");
       return;
     }
 
     if (attendanceCheckError) {
-      toast.error("আগের উপস্থিতি যাচাই করা যায়নি।");
+      toast.error("আগের উপস্থিতি যাচাই করা যায়নি।");
       return;
     }
 
     if (checkingAttendance) {
-      toast.error("আগের উপস্থিতি যাচাই শেষ হওয়া পর্যন্ত অপেক্ষা করুন।");
+      toast.error("আগের উপস্থিতি যাচাই শেষ হওয়া পর্যন্ত অপেক্ষা করুন।");
       return;
     }
 
     if (alreadyTaken) {
       toast.error(
-        `এই দিনের উপস্থিতি আগেই নেওয়া হয়েছে${takenBy ? `: ${takenBy}` : ""}।`,
+        `এই দিনের উপস্থিতি আগেই নেওয়া হয়েছে${takenBy ? `: ${takenBy}` : ""}।`,
       );
       return;
     }
@@ -733,7 +806,7 @@ export default function AddAttendance() {
     const classId = getClassId(selectedClass);
 
     if (!isAdminUser && !userDepartments.includes(departmentId)) {
-      toast.error("এই বিভাগের উপস্থিতি নেওয়ার অনুমতি নেই।");
+      toast.error("এই বিভাগের উপস্থিতি নেওয়ার অনুমতি নেই।");
       return;
     }
 
@@ -755,7 +828,7 @@ export default function AddAttendance() {
         selectedDepartment.type !== "batch"
       ) {
         toast.error(
-          "আপনি শুধু নিজের কেয়ার ব্যাচের উপস্থিতি নিতে পারবেন। আবার লগইন করুন।",
+          "আপনি শুধু নিজের কেয়ার ব্যাচের উপস্থিতি নিতে পারবেন। আবার লগইন করুন।",
         );
 
         return;
@@ -766,26 +839,21 @@ export default function AddAttendance() {
 
     try {
       /* -----------------------------------------------
-         Recheck existing attendance
+         Recheck existing attendance (fresh from the server)
       ----------------------------------------------- */
 
-      const duplicateSnapshot = await getDocs(
-        query(collection(db, "attendance"), where("date", "==", date)),
-      );
-
-      const duplicateExists = duplicateSnapshot.docs.some((item) => {
-        const record = item.data();
-
-        return (
-          normalizeId(record.departmentId) === departmentId &&
-          String(record.classId ?? "") === classId
-        );
+      const existingNow = await fetchExistingAttendance({
+        departmentName,
+        className,
+        departmentId,
+        classId,
+        date,
       });
 
-      if (duplicateExists) {
+      if (existingNow.length > 0) {
         await checkExistingAttendance();
 
-        toast.error("এই দিনের উপস্থিতি ইতিমধ্যে সংরক্ষিত হয়েছে।");
+        toast.error("এই দিনের উপস্থিতি ইতিমধ্যে সংরক্ষিত হয়েছে।");
 
         return;
       }
@@ -798,7 +866,7 @@ export default function AddAttendance() {
         profile?.name ||
         currentUser?.displayName ||
         currentUser?.email ||
-        "নাম পাওয়া যায়নি";
+        "নাম পাওয়া যায়নি";
 
       const submitterUid = currentUser?.uid || crStudent?.docId || "";
 
@@ -807,24 +875,46 @@ export default function AddAttendance() {
       const submitterRole = isCR ? "student" : role;
 
       /* -----------------------------------------------
-         Save attendance
+         Build ONE document for the whole class/batch
       ----------------------------------------------- */
 
-      const batch = writeBatch(db);
+      const records = {};
 
       students.forEach((student) => {
         const present = attendance[student.docId] === true;
 
-        const attendanceId = getAttendanceDocId(
-          date,
-          departmentName,
-          className,
-          student.docId,
-        );
+        records[student.docId] = {
+          studentId: String(student.studentId ?? ""),
+          name: student.name ?? "",
+          present,
+          status: present ? "present" : "absent",
+        };
+      });
 
-        const attendanceRef = doc(db, "attendance", attendanceId);
+      const sheetRef = doc(
+        db,
+        ATTENDANCE_COLLECTION,
+        getAttendanceSheetId(departmentName, className, date),
+      );
 
-        batch.set(attendanceRef, {
+      /* -----------------------------------------------
+         Save attendance
+
+         A transaction makes the "create only if it does
+         not exist" check and the write one atomic step,
+         so two people cannot both save the same day.
+      ----------------------------------------------- */
+
+      await runTransaction(db, async (transaction) => {
+        const snapshot = await transaction.get(sheetRef);
+
+        if (snapshot.exists()) {
+          throw new Error(ALREADY_TAKEN);
+        }
+
+        transaction.set(sheetRef, {
+          format: "sheet",
+
           date,
 
           departmentName,
@@ -833,19 +923,22 @@ export default function AddAttendance() {
           departmentId,
           classId,
 
-          studentDocId: student.docId,
-          studentId: String(student.studentId ?? ""),
-          studentName: student.name ?? "",
-
-          status: present ? "present" : "absent",
-          present,
-
           ...(isBatchDepartment(selectedDepartment)
             ? {
                 batchId: classId,
                 batchName: className,
               }
             : {}),
+
+          // Lets any student's attendance be found with one query:
+          // where("studentDocIds", "array-contains", studentDocId)
+          studentDocIds: students.map((student) => student.docId),
+
+          records,
+
+          totalStudents: students.length,
+          presentCount,
+          absentCount,
 
           takenByUid: submitterUid,
           takenByName: submitterName,
@@ -860,9 +953,7 @@ export default function AddAttendance() {
         });
       });
 
-      await batch.commit();
-
-      toast.success("উপস্থিতি সফলভাবে সংরক্ষণ করা হয়েছে।");
+      toast.success("উপস্থিতি সফলভাবে সংরক্ষণ করা হয়েছে।");
 
       /* -----------------------------------------------
          Recalculate currentMark
@@ -889,18 +980,26 @@ export default function AddAttendance() {
         console.error("currentMark recalculation failures:", failedResults);
 
         toast.error(
-          `${failedResults.length} জন শিক্ষার্থীর currentMark আপডেট হয়নি।`,
+          `${failedResults.length} জন শিক্ষার্থীর currentMark আপডেট হয়নি।`,
         );
       } else {
-        toast.success("সব শিক্ষার্থীর currentMark আপডেট হয়েছে।");
+        toast.success("সব শিক্ষার্থীর currentMark আপডেট হয়েছে।");
       }
 
       await checkExistingAttendance();
     } catch (error) {
+      if (error?.message === ALREADY_TAKEN) {
+        await checkExistingAttendance();
+
+        toast.error("এই দিনের উপস্থিতি ইতিমধ্যে সংরক্ষিত হয়েছে।");
+
+        return;
+      }
+
       console.error("Submit attendance error:", error);
 
       toast.error(
-        error.message || "উপস্থিতি সংরক্ষণ করা যায়নি। আবার চেষ্টা করুন।",
+        error.message || "উপস্থিতি সংরক্ষণ করা যায়নি। আবার চেষ্টা করুন।",
       );
     } finally {
       setSubmitting(false);
@@ -938,7 +1037,7 @@ export default function AddAttendance() {
           <h2 className="text-lg font-bold">প্রবেশের অনুমতি নেই</h2>
 
           <p className="mt-2 text-sm text-base-content/65">
-            {authError || "এই পেজ ব্যবহারের জন্য অনুমোদিত অ্যাকাউন্ট প্রয়োজন।"}
+            {authError || "এই পেজ ব্যবহারের জন্য অনুমোদিত অ্যাকাউন্ট প্রয়োজন।"}
           </p>
         </div>
       </div>
@@ -1091,14 +1190,14 @@ export default function AddAttendance() {
           <FiAlertCircle className="shrink-0 text-warning" />
 
           <div>
-            <p className="font-bold">এই দিনের উপস্থিতি আগেই নেওয়া হয়েছে।</p>
+            <p className="font-bold">এই দিনের উপস্থিতি আগেই নেওয়া হয়েছে।</p>
 
             <p className="mt-1 text-xs opacity-80">
               গ্রহণকারী: {takenBy || getSubmitterName(existingAttendance[0])}
             </p>
 
             <p className="mt-1 text-xs opacity-80">
-              রেকর্ড: {existingAttendance.length} জন
+              রেকর্ড: {existingCount} জন
             </p>
           </div>
         </div>
@@ -1158,7 +1257,7 @@ export default function AddAttendance() {
             <input
               type="search"
               className="grow"
-              placeholder="নাম অথবা শিক্ষার্থী আইডি দিয়ে খুঁজুন"
+              placeholder="নাম অথবা শিক্ষার্থী আইডি দিয়ে খুঁজুন"
               value={search}
               onChange={(event) => setSearch(event.target.value)}
             />
@@ -1213,7 +1312,7 @@ export default function AddAttendance() {
           <div className="px-4 py-12 text-center">
             <FiUsers className="mx-auto mb-3 text-3xl text-base-content/30" />
 
-            <p className="font-semibold">কোনো শিক্ষার্থী পাওয়া যায়নি।</p>
+            <p className="font-semibold">কোনো শিক্ষার্থী পাওয়া যায়নি।</p>
 
             <p className="mt-1 text-xs text-base-content/60">
               বিভাগ, শ্রেণি/ব্যাচ এবং শিক্ষার্থীদের তথ্য যাচাই করুন।

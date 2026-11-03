@@ -11,7 +11,7 @@ import { verbs } from "../../students/data/verbs";
 
 const SESSION_KEY = "studentSession";
 const START_DATE = "2026-10-28";
-const DAILY_COUNT = 10;
+const DAILY_COUNT = 5;
 
 function getSetInfo() {
   if (!verbs.length || DAILY_COUNT < 1) return null;

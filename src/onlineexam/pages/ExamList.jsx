@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 
 import {
+  arrayUnion,
   collection,
   doc,
   getDoc,
@@ -22,6 +23,12 @@ import { getExamAttemptId, getExamState, toDate } from "../examUtils";
 import { db } from "../../assets/firebase/firebase.init";
 
 /* =========================================================
+   Constants
+========================================================= */
+
+const RETAKE_COST = 10;
+
+/* =========================================================
    Helpers
 ========================================================= */
 
@@ -38,6 +45,21 @@ function getStoredStudentSession() {
 function normalizeId(value) {
   if (value === undefined || value === null) return "";
   return String(value).trim();
+}
+
+function getStudentPointInfo(studentData = {}) {
+  const fields = ["point1", "point", "points"];
+
+  const field = fields.find(
+    (key) => studentData[key] !== undefined && studentData[key] !== null,
+  );
+
+  const selectedField = field || "point1";
+
+  return {
+    field: selectedField,
+    balance: Number(studentData[selectedField] || 0),
+  };
 }
 
 function canReviewAnswers(exam) {
@@ -69,9 +91,10 @@ function getExamClassIds(exam) {
   ];
 }
 
-/**
- * Converts answer values to comparable strings.
- */
+/* =========================================================
+   Answer Review Helpers
+========================================================= */
+
 function normalizeAnswer(value) {
   if (value === undefined || value === null) return "";
 
@@ -87,10 +110,6 @@ function normalizeAnswer(value) {
   return String(value).trim().toLowerCase();
 }
 
-/**
- * Gets the correct answer from a question.
- * Adjust these fields if your question schema uses different names.
- */
 function getCorrectAnswer(question) {
   return (
     question?.correctAnswer ??
@@ -103,9 +122,6 @@ function getCorrectAnswer(question) {
   );
 }
 
-/**
- * Gets the student's answer from a result.
- */
 function getStudentAnswer(result, question, index) {
   const answers = result?.answers;
 
@@ -146,7 +162,6 @@ function getStudentAnswer(result, question, index) {
 
   if (typeof answers === "object") {
     const answerKey = questionId ?? String(index);
-
     const answer = answers[answerKey];
 
     if (answer && typeof answer === "object") {
@@ -171,57 +186,82 @@ function getQuestionText(question) {
     question?.questionText ??
     question?.text ??
     question?.title ??
-    "প্রশ্নের লেখা পাওয়া যায়নি"
+    "প্রশ্নের লেখা পাওয়া যায়নি"
   );
 }
 
-function getOptionText(question, answer) {
-  if (answer === null || answer === undefined || answer === "") {
-    return "উত্তর দেওয়া হয়নি";
+function getOptionList(question) {
+  if (Array.isArray(question?.options)) return question.options;
+  if (Array.isArray(question?.choices)) return question.choices;
+
+  return [];
+}
+
+function getOptionLabel(option) {
+  if (option === null || option === undefined) return "";
+
+  if (typeof option === "object") {
+    return String(
+      option.text ??
+        option.label ??
+        option.value ??
+        option.option ??
+        option.name ??
+        "",
+    );
   }
 
-  const options = Array.isArray(question?.options)
-    ? question.options
-    : Array.isArray(question?.choices)
-      ? question.choices
-      : [];
+  return String(option);
+}
 
-  const answerValue = normalizeAnswer(answer);
+function findOptionIndex(question, answer) {
+  if (answer === null || answer === undefined || answer === "") return -1;
 
-  const matchedOption = options.find((option) => {
+  const options = getOptionList(question);
+
+  if (options.length === 0) return -1;
+
+  const numeric =
+    typeof answer === "number"
+      ? answer
+      : typeof answer === "string" && /^\d+$/.test(answer.trim())
+        ? Number(answer.trim())
+        : null;
+
+  const isValidIndex =
+    Number.isInteger(numeric) && numeric >= 0 && numeric < options.length;
+
+  const optionsArePlainText = options.every(
+    (option) => typeof option !== "object" || option === null,
+  );
+
+  if (optionsArePlainText && isValidIndex) return numeric;
+
+  const answerKey = normalizeAnswer(answer);
+
+  const matchedIndex = options.findIndex((option) => {
     if (typeof option !== "object" || option === null) {
-      return normalizeAnswer(option) === answerValue;
+      return normalizeAnswer(option) === answerKey;
     }
 
-    const values = [
+    return [
       option.id,
       option.value,
       option.key,
       option.label,
       option.text,
       option.option,
-    ];
-
-    return values.some(
-      (value) => value !== undefined && normalizeAnswer(value) === answerValue,
+    ].some(
+      (value) =>
+        value !== undefined &&
+        value !== null &&
+        normalizeAnswer(value) === answerKey,
     );
   });
 
-  if (matchedOption) {
-    if (typeof matchedOption === "object") {
-      return (
-        matchedOption.text ??
-        matchedOption.label ??
-        matchedOption.value ??
-        matchedOption.option ??
-        String(answer)
-      );
-    }
+  if (matchedIndex >= 0) return matchedIndex;
 
-    return String(matchedOption);
-  }
-
-  return String(answer);
+  return isValidIndex ? numeric : -1;
 }
 
 function isAnswerCorrect(studentAnswer, correctAnswer) {
@@ -238,6 +278,10 @@ function isAnswerCorrect(studentAnswer, correctAnswer) {
 
   return normalizeAnswer(studentAnswer) === normalizeAnswer(correctAnswer);
 }
+
+/* =========================================================
+   Animations
+========================================================= */
 
 const pageVariants = {
   hidden: { opacity: 0, y: 18 },
@@ -325,14 +369,14 @@ function EmptyState() {
 
       <div className="mt-6 inline-flex items-center gap-2 rounded-full border border-base-300 bg-base-200/50 px-4 py-2 text-xs text-base-content/60">
         <span className="h-2 w-2 rounded-full bg-success" />
-        পরীক্ষার তালিকা আপডেটের অপেক্ষায়
+        পরীক্ষার তালিকা আপডেটের অপেক্ষায়
       </div>
     </motion.div>
   );
 }
 
 /* =========================================================
-   Answer Review Screen — No Modal
+   Answer Review Screen
 ========================================================= */
 
 function AnswerReviewScreen({ exam, result, onBack }) {
@@ -347,13 +391,28 @@ function AnswerReviewScreen({ exam, result, onBack }) {
 
   const reviewAllowed = Boolean(finishTime && now < finishTime.getTime());
 
-  const questions = Array.isArray(exam?.questions)
+  const allQuestions = Array.isArray(exam?.questions)
     ? exam.questions
     : Array.isArray(exam?.questionList)
       ? exam.questionList
       : [];
 
-  const reviewedQuestions = questions.map((question, index) => {
+  const hasShownList =
+    Array.isArray(result?.review) &&
+    result.review.length > 0 &&
+    result.review.every((item) => Number.isInteger(item.sourceIndex));
+
+  const shownIndexes = hasShownList
+    ? result.review.map((item) => item.sourceIndex)
+    : allQuestions.map((_, index) => index);
+
+  const questions = shownIndexes
+    .filter((index) => allQuestions[index])
+    .map((index) => ({ index, question: allQuestions[index] }));
+
+  const reviewedQuestions = questions.map(({ question, index }, position) => {
+    const options = getOptionList(question);
+
     const studentAnswer = getStudentAnswer(result, question, index);
     const correctAnswer = getCorrectAnswer(question);
 
@@ -362,13 +421,38 @@ function AnswerReviewScreen({ exam, result, onBack }) {
       studentAnswer !== undefined &&
       studentAnswer !== "";
 
-    const correct = isAnswerCorrect(studentAnswer, correctAnswer);
+    const studentIndex = findOptionIndex(question, studentAnswer);
+    const correctIndex = findOptionIndex(question, correctAnswer);
+
+    const correct =
+      studentIndex >= 0 && correctIndex >= 0
+        ? studentIndex === correctIndex
+        : isAnswerCorrect(studentAnswer, correctAnswer);
+
+    const studentText = !answered
+      ? "উত্তর দেওয়া হয়নি"
+      : studentIndex >= 0
+        ? getOptionLabel(options[studentIndex])
+        : String(studentAnswer);
+
+    const correctText =
+      correctIndex >= 0
+        ? getOptionLabel(options[correctIndex])
+        : correctAnswer !== null &&
+            correctAnswer !== undefined &&
+            correctAnswer !== ""
+          ? String(correctAnswer)
+          : "সঠিক উত্তর নির্ধারিত নেই";
 
     return {
       question,
       index,
-      studentAnswer,
-      correctAnswer,
+      position,
+      options,
+      studentIndex,
+      correctIndex,
+      studentText,
+      correctText,
       answered,
       correct,
     };
@@ -384,7 +468,6 @@ function AnswerReviewScreen({ exam, result, onBack }) {
     (item) => !item.answered,
   ).length;
 
-  // Do not show answers after the exam's finish time.
   if (!reviewAllowed) {
     return (
       <motion.main
@@ -398,17 +481,17 @@ function AnswerReviewScreen({ exam, result, onBack }) {
           onClick={onBack}
           className="mb-5 inline-flex items-center gap-2 rounded-xl border border-base-300 px-4 py-2 text-sm font-semibold hover:bg-base-200"
         >
-          ← পরীক্ষার তালিকায় ফিরুন
+          ← পরীক্ষার তালিকায় ফিরুন
         </button>
 
         <section className="rounded-3xl border border-warning/30 bg-warning/5 p-8 text-center">
           <div className="mb-3 text-4xl">🔒</div>
 
-          <h2 className="text-xl font-bold">উত্তর পর্যালোচনার সময় শেষ</h2>
+          <h2 className="text-xl font-bold">উত্তর পর্যালোচনার সময় শেষ</h2>
 
           <p className="mt-3 text-sm leading-7 text-base-content/60">
-            পরীক্ষার নির্ধারিত সময় শেষ হয়ে যাওয়ায় এখন আর সঠিক ও ভুল উত্তর দেখা
-            যাবে না।
+            পরীক্ষার নির্ধারিত সময় শেষ হয়ে যাওয়ায় এখন আর সঠিক ও ভুল উত্তর
+            দেখা যাবে না।
           </p>
         </section>
       </motion.main>
@@ -428,7 +511,7 @@ function AnswerReviewScreen({ exam, result, onBack }) {
           onClick={onBack}
           className="mb-5 inline-flex items-center gap-2 rounded-xl border border-base-300 bg-base-100 px-4 py-2.5 text-sm font-semibold transition hover:bg-base-200"
         >
-          ← পরীক্ষার তালিকায় ফিরুন
+          ← পরীক্ষার তালিকায় ফিরুন
         </button>
 
         <div className="rounded-3xl border border-base-300 bg-base-100 p-5 shadow-sm sm:p-7">
@@ -443,17 +526,17 @@ function AnswerReviewScreen({ exam, result, onBack }) {
               </h1>
 
               <p className="mt-2 text-sm text-base-content/60">
-                নির্ধারিত সময় শেষ হওয়া পর্যন্ত এই পেজে উত্তর দেখা যাবে।
+                নির্ধারিত সময় শেষ হওয়া পর্যন্ত এই পেজে উত্তর দেখা যাবে।
               </p>
             </div>
 
             <div className="rounded-2xl border border-warning/30 bg-warning/10 px-4 py-3 text-sm">
-              <p className="font-semibold text-warning">উত্তর দেখার শেষ সময়</p>
+              <p className="font-semibold text-warning">উত্তর দেখার শেষ সময়</p>
 
               <p className="mt-1">
                 {finishTime
                   ? finishTime.toLocaleString("bn-BD")
-                  : "নির্ধারিত নয়"}
+                  : "নির্ধারিত নয়"}
               </p>
             </div>
           </div>
@@ -479,7 +562,7 @@ function AnswerReviewScreen({ exam, result, onBack }) {
             </div>
 
             <div className="rounded-2xl border border-base-300 bg-base-200/50 p-4">
-              <p className="text-sm text-base-content/60">উত্তর দেওয়া হয়নি</p>
+              <p className="text-sm text-base-content/60">উত্তর দেওয়া হয়নি</p>
               <p className="mt-1 text-2xl font-extrabold">{unansweredCount}</p>
             </div>
           </div>
@@ -488,10 +571,10 @@ function AnswerReviewScreen({ exam, result, onBack }) {
 
       {questions.length === 0 ? (
         <div className="rounded-2xl border border-warning/30 bg-warning/5 p-6 text-center">
-          <p className="font-semibold">এই পরীক্ষার প্রশ্নগুলো পাওয়া যায়নি।</p>
+          <p className="font-semibold">এই পরীক্ষার প্রশ্নগুলো পাওয়া যায়নি।</p>
 
           <p className="mt-2 text-sm text-base-content/60">
-            পরীক্ষার ডেটায় questions অথবা questionList থাকতে হবে।
+            পরীক্ষার ডেটায় questions অথবা questionList থাকতে হবে।
           </p>
         </div>
       ) : (
@@ -500,8 +583,12 @@ function AnswerReviewScreen({ exam, result, onBack }) {
             ({
               question,
               index,
-              studentAnswer,
-              correctAnswer,
+              position,
+              options,
+              studentIndex,
+              correctIndex,
+              studentText,
+              correctText,
               answered,
               correct,
             }) => (
@@ -518,7 +605,7 @@ function AnswerReviewScreen({ exam, result, onBack }) {
               >
                 <div className="flex items-start gap-3">
                   <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-base-200 text-sm font-bold">
-                    {index + 1}
+                    {position + 1}
                   </span>
 
                   <div className="min-w-0 flex-1">
@@ -533,7 +620,7 @@ function AnswerReviewScreen({ exam, result, onBack }) {
                         }`}
                       >
                         {!answered
-                          ? "উত্তর দেওয়া হয়নি"
+                          ? "উত্তর দেওয়া হয়নি"
                           : correct
                             ? "সঠিক উত্তর"
                             : "ভুল উত্তর"}
@@ -550,69 +637,45 @@ function AnswerReviewScreen({ exam, result, onBack }) {
                       {getQuestionText(question)}
                     </h2>
 
-                    {Array.isArray(question.options) &&
-                      question.options.length > 0 && (
-                        <div className="mt-4 space-y-2">
-                          {question.options.map((option, optionIndex) => {
-                            const optionValue =
-                              typeof option === "object" && option !== null
-                                ? (option.id ??
-                                  option.value ??
-                                  option.key ??
-                                  option.label ??
-                                  option.text)
-                                : option;
+                    {options.length > 0 && (
+                      <div className="mt-4 space-y-2">
+                        {options.map((option, optionIndex) => {
+                          const isCorrectOption = optionIndex === correctIndex;
+                          const isSelectedOption = optionIndex === studentIndex;
 
-                            const optionText =
-                              typeof option === "object" && option !== null
-                                ? (option.text ??
-                                  option.label ??
-                                  option.value ??
-                                  option.option ??
-                                  String(optionValue ?? ""))
-                                : String(option);
+                          return (
+                            <div
+                              key={optionIndex}
+                              className={`rounded-xl border px-4 py-3 text-sm ${
+                                isCorrectOption
+                                  ? "border-success/40 bg-success/10"
+                                  : isSelectedOption
+                                    ? "border-error/40 bg-error/10"
+                                    : "border-base-300"
+                              }`}
+                            >
+                              <div className="flex items-start gap-2">
+                                <span className="flex-1 whitespace-pre-wrap">
+                                  {getOptionLabel(option)}
+                                </span>
 
-                            const isCorrectOption =
-                              correctAnswer !== null &&
-                              normalizeAnswer(optionValue) ===
-                                normalizeAnswer(correctAnswer);
+                                {isCorrectOption && (
+                                  <span className="shrink-0 font-semibold text-success">
+                                    সঠিক
+                                  </span>
+                                )}
 
-                            const isSelectedOption =
-                              studentAnswer !== null &&
-                              normalizeAnswer(optionValue) ===
-                                normalizeAnswer(studentAnswer);
-
-                            return (
-                              <div
-                                key={optionIndex}
-                                className={`rounded-xl border px-4 py-3 text-sm ${
-                                  isCorrectOption
-                                    ? "border-success/40 bg-success/10"
-                                    : isSelectedOption
-                                      ? "border-error/40 bg-error/10"
-                                      : "border-base-300"
-                                }`}
-                              >
-                                <div className="flex items-start gap-2">
-                                  <span className="flex-1">{optionText}</span>
-
-                                  {isCorrectOption && (
-                                    <span className="shrink-0 font-semibold text-success">
-                                      সঠিক
-                                    </span>
-                                  )}
-
-                                  {isSelectedOption && !isCorrectOption && (
-                                    <span className="shrink-0 font-semibold text-error">
-                                      তোমার উত্তর
-                                    </span>
-                                  )}
-                                </div>
+                                {isSelectedOption && !isCorrectOption && (
+                                  <span className="shrink-0 font-semibold text-error">
+                                    তোমার উত্তর
+                                  </span>
+                                )}
                               </div>
-                            );
-                          })}
-                        </div>
-                      )}
+                            </div>
+                          );
+                        })}
+                      </div>
+                    )}
 
                     <div className="mt-4 grid gap-3 sm:grid-cols-2">
                       <div className="rounded-xl border border-base-300 p-3">
@@ -629,7 +692,7 @@ function AnswerReviewScreen({ exam, result, onBack }) {
                                 : "text-error"
                           }`}
                         >
-                          {getOptionText(question, studentAnswer)}
+                          {studentText}
                         </p>
                       </div>
 
@@ -639,7 +702,7 @@ function AnswerReviewScreen({ exam, result, onBack }) {
                         </p>
 
                         <p className="mt-1 whitespace-pre-wrap text-sm font-medium">
-                          {getOptionText(question, correctAnswer)}
+                          {correctText}
                         </p>
                       </div>
                     </div>
@@ -682,7 +745,6 @@ const OnlineExamList = ({ student: studentProp }) => {
 
   const [busyExamId, setBusyExamId] = useState(null);
   const [activeSession, setActiveSession] = useState(null);
-
   const [reviewSession, setReviewSession] = useState(null);
 
   const hasStudentSession =
@@ -714,7 +776,7 @@ const OnlineExamList = ({ student: studentProp }) => {
 
         if (!studentSnapshot.exists()) {
           setStudent(null);
-          toast.error("শিক্ষার্থীর প্রোফাইল পাওয়া যায়নি।");
+          toast.error("শিক্ষার্থীর প্রোফাইল পাওয়া যায়নি।");
           return;
         }
 
@@ -729,7 +791,7 @@ const OnlineExamList = ({ student: studentProp }) => {
         if (isActive === false || isActive === "false" || isActive === 0) {
           localStorage.removeItem("studentSession");
           setStudent(null);
-          toast.error("আপনার শিক্ষার্থী অ্যাকাউন্টটি নিষ্ক্রিয়।");
+          toast.error("আপনার শিক্ষার্থী অ্যাকাউন্টটি নিষ্ক্রিয়।");
           return;
         }
 
@@ -790,7 +852,7 @@ const OnlineExamList = ({ student: studentProp }) => {
 
         if (active) {
           toast.error(
-            "শিক্ষার্থীর তথ্য লোড করা যায়নি। ইন্টারনেট ও Firestore Rules পরীক্ষা করুন।",
+            "শিক্ষার্থীর তথ্য লোড করা যায়নি। ইন্টারনেট ও Firestore Rules পরীক্ষা করুন।",
           );
         }
       } finally {
@@ -820,6 +882,17 @@ const OnlineExamList = ({ student: studentProp }) => {
   const departmentName = department?.name || student?.departmentName || "বিভাগ";
 
   const studentClassId = normalizeId(student?.classId || student?.batchId);
+
+  const studentPointInfo = useMemo(
+    () => getStudentPointInfo(student || {}),
+    [student],
+  );
+
+  const retakenExamIds = useMemo(
+    () =>
+      Array.isArray(student?.retakenExamIds) ? student.retakenExamIds : [],
+    [student],
+  );
 
   /* =========================================================
      Load Exams, Results and Attempts
@@ -912,7 +985,7 @@ const OnlineExamList = ({ student: studentProp }) => {
       console.error("Load online exams error:", error);
 
       toast.error(
-        "পরীক্ষা বা ফলাফল লোড করা যায়নি। Firestore Rules ও ইন্টারনেট সংযোগ পরীক্ষা করুন।",
+        "পরীক্ষা বা ফলাফল লোড করা যায়নি। Firestore Rules ও ইন্টারনেট সংযোগ পরীক্ষা করুন।",
       );
     } finally {
       setLoading(false);
@@ -994,27 +1067,40 @@ const OnlineExamList = ({ student: studentProp }) => {
   }, [exams, student, studentClassId, results, attempts]);
 
   /* =========================================================
-     Start Exam
+     Start Exam / Retake Exam
   ========================================================= */
 
   const handleParticipate = async (exam) => {
     if (!hasStudentSession || !student || !studentKey) {
-      toast.error("তোমার session পাওয়া যায়নি। আবার লগইন করো।");
+      toast.error("তোমার session পাওয়া যায়নি। আবার লগইন করো।");
       return;
     }
 
     if (getExamState(exam) !== "active") {
-      toast.error("এই মুহূর্তে পরীক্ষা দেওয়া যাচ্ছে না।");
+      toast.error("এই মুহূর্তে পরীক্ষা দেওয়া যাচ্ছে না।");
+      return;
+    }
+
+    const isRetake = Boolean(results[exam.id]);
+
+    if (isRetake && retakenExamIds.includes(exam.id)) {
+      toast.error("এই পরীক্ষায় তুমি ইতোমধ্যে রিটেক দিয়েছো।");
       return;
     }
 
     const confirmation = await Swal.fire({
-      icon: "question",
-      title: "পরীক্ষা শুরু করবে?",
-      text: "পরীক্ষা শুরু করার আগে প্রস্তুত হয়ে নাও। নির্ধারিত সময়ের মধ্যে উত্তর জমা দিতে হবে।",
+      icon: isRetake ? "warning" : "question",
+      title: isRetake ? "১০ পয়েন্ট দিয়ে রিটেক করবে?" : "পরীক্ষা শুরু করবে?",
+      html: isRetake
+        ? `
+            <p>এই পরীক্ষায় এটি তোমার দ্বিতীয় অংশগ্রহণ।</p>
+            <p class="mt-2 font-bold text-warning">১০ পয়েন্ট কাটা হবে।</p>
+            <p class="mt-2 text-sm">নতুন ফলাফল আগের ফলাফলকে প্রতিস্থাপন করবে।</p>
+          `
+        : "পরীক্ষা শুরু করার আগে প্রস্তুত হয়ে নাও। নির্ধারিত সময়ের মধ্যে উত্তর জমা দিতে হবে।",
       showCancelButton: true,
-      confirmButtonText: "হ্যাঁ, শুরু করি",
-      cancelButtonText: "এখন নয়",
+      confirmButtonText: isRetake ? "১০ পয়েন্ট দিয়ে শুরু" : "হ্যাঁ, শুরু করি",
+      cancelButtonText: "এখন নয়",
       reverseButtons: true,
       confirmButtonColor: "#4f46e5",
       allowOutsideClick: false,
@@ -1029,6 +1115,7 @@ const OnlineExamList = ({ student: studentProp }) => {
 
       const attemptRef = doc(db, "examAttempts", attemptId);
       const resultRef = doc(db, "examResults", attemptId);
+      const studentRef = doc(db, "students", student.documentId);
 
       const now = new Date();
       const start = toDate(exam.startTime);
@@ -1039,9 +1126,13 @@ const OnlineExamList = ({ student: studentProp }) => {
         !finish ||
         now < start ||
         now >= finish ||
-        exam.status === false
+        exam.status === false ||
+        exam.status === "disabled" ||
+        exam.status === "inactive"
       ) {
-        throw new Error("পরীক্ষার সময় হয়নি, সময় শেষ হয়েছে অথবা পরীক্ষা বন্ধ।");
+        throw new Error(
+          "পরীক্ষার সময় হয়নি, সময় শেষ হয়েছে অথবা পরীক্ষা বন্ধ।",
+        );
       }
 
       const durationMs =
@@ -1050,12 +1141,15 @@ const OnlineExamList = ({ student: studentProp }) => {
         1000;
 
       if (durationMs <= 0) {
-        throw new Error("পরীক্ষার সময় নির্ধারণ করা হয়নি।");
+        throw new Error("পরীক্ষার সময় নির্ধারণ করা হয়নি।");
       }
 
       const deadline = new Date(
         Math.min(now.getTime() + durationMs, finish.getTime()),
       );
+
+      // প্রতিটি নতুন Attempt-এর জন্য নতুন Seed।
+      const randomizationSeed = crypto.randomUUID();
 
       const attemptData = {
         examId: exam.id,
@@ -1079,22 +1173,112 @@ const OnlineExamList = ({ student: studentProp }) => {
 
         startedAt: Timestamp.fromDate(now),
         deadlineAt: Timestamp.fromDate(deadline),
+
+        // Randomization
+        randomizationSeed,
+
+        // Attempt information (transaction-এর মধ্যে final হবে)
+        isRetake,
+        attemptNumber: isRetake ? 2 : 1,
       };
 
-      await runTransaction(db, async (transaction) => {
-        const existingAttempt = await transaction.get(attemptRef);
-        const existingResult = await transaction.get(resultRef);
+      const transactionResult = await runTransaction(
+        db,
+        async (transaction) => {
+          // সব Read আগে করতে হবে।
+          const [attemptSnapshot, resultSnapshot, studentSnapshot] =
+            await Promise.all([
+              transaction.get(attemptRef),
+              transaction.get(resultRef),
+              transaction.get(studentRef),
+            ]);
 
-        if (existingAttempt.exists() || existingResult.exists()) {
-          throw new Error("এই পরীক্ষার attempt বা ফলাফল আগে থেকেই রয়েছে।");
-        }
+          if (!studentSnapshot.exists()) {
+            throw new Error("শিক্ষার্থীর প্রোফাইল পাওয়া যায়নি।");
+          }
 
-        transaction.set(attemptRef, attemptData);
-      });
+          if (attemptSnapshot.exists()) {
+            throw new Error("এই পরীক্ষার একটি অসমাপ্ত attempt রয়েছে।");
+          }
+
+          const freshStudent = studentSnapshot.data();
+
+          const freshRetakenExamIds = Array.isArray(freshStudent.retakenExamIds)
+            ? freshStudent.retakenExamIds
+            : [];
+
+          const hasPreviousResult = resultSnapshot.exists();
+
+          const alreadyRetaken = freshRetakenExamIds.includes(exam.id);
+
+          const pointInfo = getStudentPointInfo(freshStudent);
+
+          if (hasPreviousResult) {
+            if (alreadyRetaken) {
+              throw new Error("এই পরীক্ষায় তুমি ইতোমধ্যে রিটেক দিয়েছো।");
+            }
+
+            if (
+              !Number.isFinite(pointInfo.balance) ||
+              pointInfo.balance < RETAKE_COST
+            ) {
+              const error = new Error("পর্যাপ্ত পয়েন্ট নেই।");
+              error.code = "INSUFFICIENT_POINTS";
+              error.balance = Number.isFinite(pointInfo.balance)
+                ? pointInfo.balance
+                : 0;
+
+              throw error;
+            }
+
+            transaction.update(studentRef, {
+              [pointInfo.field]: pointInfo.balance - RETAKE_COST,
+              retakenExamIds: arrayUnion(exam.id),
+            });
+          } else if (alreadyRetaken) {
+            throw new Error("এই পরীক্ষায় তুমি ইতোমধ্যে রিটেক দিয়েছো।");
+          }
+
+          // Firestore-এর প্রকৃত Result অনুযায়ী Attempt information।
+          const finalAttemptData = {
+            ...attemptData,
+            isRetake: hasPreviousResult,
+            attemptNumber: hasPreviousResult ? 2 : 1,
+          };
+
+          // একই attemptId ব্যবহার করা হচ্ছে।
+          // আগের result মুছে ফেলা হচ্ছে না।
+          transaction.set(attemptRef, finalAttemptData);
+
+          return {
+            isRetake: hasPreviousResult,
+            remainingPoints: hasPreviousResult
+              ? pointInfo.balance - RETAKE_COST
+              : pointInfo.balance,
+            pointField: pointInfo.field,
+          };
+        },
+      );
+
+      // Update local student points.
+      if (transactionResult.isRetake) {
+        setStudent((previous) => ({
+          ...previous,
+          [transactionResult.pointField]: transactionResult.remainingPoints,
+          retakenExamIds: [
+            ...(previous.retakenExamIds || []).filter((id) => id !== exam.id),
+            exam.id,
+          ],
+        }));
+
+        toast.success("১০ পয়েন্ট কেটে রিটেক শুরু হয়েছে।");
+      }
 
       const attempt = {
         id: attemptId,
         ...attemptData,
+        isRetake: transactionResult.isRetake,
+        attemptNumber: transactionResult.isRetake ? 2 : 1,
       };
 
       setAttempts((previous) => ({
@@ -1109,15 +1293,30 @@ const OnlineExamList = ({ student: studentProp }) => {
     } catch (error) {
       console.error("Start exam error:", error);
 
-      await Swal.fire({
-        icon: "error",
-        title: "পরীক্ষা শুরু করা যায়নি",
-        text:
-          error.message ||
-          "আবার চেষ্টা করো। প্রয়োজনে অ্যাডমিনের সঙ্গে যোগাযোগ করো।",
-        confirmButtonText: "ঠিক আছে",
-        confirmButtonColor: "#4f46e5",
-      });
+      if (error.code === "INSUFFICIENT_POINTS") {
+        await Swal.fire({
+          icon: "warning",
+          title: "পর্যাপ্ত পয়েন্ট নেই",
+          html: `
+            <p>রিটেক দিতে ${RETAKE_COST} পয়েন্ট প্রয়োজন।</p>
+            <p class="mt-2">তোমার বর্তমান পয়েন্ট:
+              <strong>${error.balance ?? 0}</strong>
+            </p>
+          `,
+          confirmButtonText: "ঠিক আছে",
+          confirmButtonColor: "#4f46e5",
+        });
+      } else {
+        await Swal.fire({
+          icon: "error",
+          title: "পরীক্ষা শুরু করা যায়নি",
+          text:
+            error.message ||
+            "আবার চেষ্টা করো। প্রয়োজনে অ্যাডমিনের সঙ্গে যোগাযোগ করো।",
+          confirmButtonText: "ঠিক আছে",
+          confirmButtonColor: "#4f46e5",
+        });
+      }
 
       await loadData();
     } finally {
@@ -1134,13 +1333,13 @@ const OnlineExamList = ({ student: studentProp }) => {
       const attemptDeadline = toDate(attempt.deadlineAt);
 
       if (attemptDeadline && Date.now() >= attemptDeadline.getTime()) {
-        toast.error("এই পরীক্ষার সময় শেষ হয়েছে।");
+        toast.error("এই পরীক্ষার সময় শেষ হয়েছে।");
         return;
       }
     }
 
     if (getExamState(exam) !== "active") {
-      toast.error("এই মুহূর্তে পরীক্ষা চালিয়ে যাওয়া যাচ্ছে না।");
+      toast.error("এই মুহূর্তে পরীক্ষা চালিয়ে যাওয়া যাচ্ছে না।");
       return;
     }
 
@@ -1153,12 +1352,12 @@ const OnlineExamList = ({ student: studentProp }) => {
 
   const handleViewAnswers = (exam, result) => {
     if (!result) {
-      toast.error("পরীক্ষার ফলাফল পাওয়া যায়নি।");
+      toast.error("পরীক্ষার ফলাফল পাওয়া যায়নি।");
       return;
     }
 
     if (!canReviewAnswers(exam)) {
-      toast.error("উত্তর পর্যালোচনার সময় শেষ হয়েছে।");
+      toast.error("উত্তর পর্যালোচনার সময় শেষ হয়েছে।");
       return;
     }
 
@@ -1187,7 +1386,7 @@ const OnlineExamList = ({ student: studentProp }) => {
 
     setActiveSession(null);
 
-    toast.success("পরীক্ষা সফলভাবে জমা হয়েছে!");
+    toast.success("পরীক্ষা সফলভাবে জমা হয়েছে!");
 
     loadData();
   };
@@ -1202,10 +1401,10 @@ const OnlineExamList = ({ student: studentProp }) => {
         <div className="max-w-md rounded-3xl border border-warning/20 bg-warning/5 p-8 text-center">
           <div className="mb-4 text-4xl">🔐</div>
 
-          <h2 className="text-xl font-bold">লগইন প্রয়োজন</h2>
+          <h2 className="text-xl font-bold">লগইন প্রয়োজন</h2>
 
           <p className="mt-2 text-sm leading-6 text-base-content/60">
-            অনলাইন পরীক্ষা দেখতে শিক্ষার্থী অ্যাকাউন্ট দিয়ে লগইন করো।
+            অনলাইন পরীক্ষা দেখতে শিক্ষার্থী অ্যাকাউন্ট দিয়ে লগইন করো।
           </p>
         </div>
       </div>
@@ -1223,7 +1422,7 @@ const OnlineExamList = ({ student: studentProp }) => {
           <div className="mb-4 text-4xl">👤</div>
 
           <h2 className="text-xl font-bold">
-            শিক্ষার্থীর প্রোফাইল পাওয়া যায়নি
+            শিক্ষার্থীর প্রোফাইল পাওয়া যায়নি
           </h2>
 
           <p className="mt-3 text-sm leading-6 text-base-content/60">
@@ -1297,10 +1496,22 @@ const OnlineExamList = ({ student: studentProp }) => {
           </p>
         </div>
 
-        <div className="flex items-center gap-2 self-start rounded-xl border border-base-300 bg-base-100 px-3.5 py-2.5 text-sm sm:self-auto">
-          <span>📋</span>
+        <div className="flex flex-wrap items-center gap-2">
+          <div className="flex items-center gap-2 rounded-xl border border-success/20 bg-success/5 px-3.5 py-2.5 text-sm">
+            <span>⭐</span>
 
-          <span className="font-semibold">{visibleExams.length}টি পরীক্ষা</span>
+            <span className="font-semibold">
+              পয়েন্ট: {studentPointInfo.balance}
+            </span>
+          </div>
+
+          <div className="flex items-center gap-2 rounded-xl border border-base-300 bg-base-100 px-3.5 py-2.5 text-sm">
+            <span>📋</span>
+
+            <span className="font-semibold">
+              {visibleExams.length}টি পরীক্ষা
+            </span>
+          </div>
         </div>
       </motion.section>
 
@@ -1318,6 +1529,14 @@ const OnlineExamList = ({ student: studentProp }) => {
           {visibleExams.map((exam) => {
             const result = results[exam.id];
             const attempt = attempts[exam.id];
+
+            const hasRetaken = retakenExamIds.includes(exam.id);
+
+            const canRetake =
+              Boolean(result) &&
+              !hasRetaken &&
+              !attempt &&
+              getExamState(exam) === "active";
 
             return (
               <motion.div
@@ -1340,6 +1559,25 @@ const OnlineExamList = ({ student: studentProp }) => {
                     canReviewAnswers={canReviewAnswers(exam)}
                   />
                 </div>
+
+                {canRetake && (
+                  <button
+                    type="button"
+                    onClick={() => handleParticipate(exam)}
+                    disabled={busyExamId === exam.id}
+                    className="btn btn-primary w-full rounded-xl"
+                  >
+                    {busyExamId === exam.id
+                      ? "অপেক্ষা করো..."
+                      : "↻ ১০ পয়েন্ট দিয়ে রিটেক"}
+                  </button>
+                )}
+
+                {result && hasRetaken && (
+                  <div className="rounded-xl border border-success/20 bg-success/5 px-3 py-2 text-center text-xs font-medium text-success">
+                    রিটেক সম্পন্ন হয়েছে
+                  </div>
+                )}
               </motion.div>
             );
           })}

@@ -20,7 +20,6 @@ import {
   FiMapPin,
   FiPhone,
   FiAward,
-  FiLogOut,
 } from "react-icons/fi";
 
 import { RiDiamondFill } from "react-icons/ri";
@@ -32,6 +31,7 @@ import LoadingScreen from "../components/LoadingScreen";
 import VocabularyWidget from "../components/widget/VocabularyWidget";
 import VerbWidget from "../components/widget/VerbWidget";
 import Leaderboard from "../components/Leaderboard";
+import RunningExamsWidget from "./RunningExamsWidget";
 
 const SESSION_KEY = "studentSession";
 const THEME_KEY = "topline-theme";
@@ -44,7 +44,9 @@ const icons = {
   user: FiUser,
 };
 
-/* Helpers */
+/* =========================================================
+   Helpers
+========================================================= */
 
 function getStudentSession() {
   try {
@@ -89,28 +91,33 @@ function getProgram(student) {
     student?.departmentName || student?.department || "",
   ).toLowerCase();
 
-  if (departmentId === "3" || department.includes("care")) return "care";
-  if (departmentId === "1" || department.includes("academy")) return "academy";
-  if (departmentId === "2" || department.includes("coaching"))
+  if (departmentId === "3" || department.includes("care")) {
+    return "care";
+  }
+
+  if (departmentId === "1" || department.includes("academy")) {
+    return "academy";
+  }
+
+  if (departmentId === "2" || department.includes("coaching")) {
     return "coaching";
+  }
 
   return null;
 }
 
-function getCurrentMark(student) {
-  const value =
-    student?.currentMark ??
-    student?.currentMarks ??
-    student?.totalMark ??
-    student?.totalMarks ??
-    student?.obtainedMarks ??
-    student?.marks;
+/* Current Mark */
 
-  if (value && typeof value === "object") {
-    return value.obtained ?? value.total ?? value.marks ?? value.score ?? null;
+function getCurrentMark(student) {
+  const value = student?.currentMark;
+
+  if (value === undefined || value === null || value === "") {
+    return "—";
   }
 
-  return value == null || value === "" ? null : value;
+  const number = Number(value);
+
+  return Number.isFinite(number) ? number : "—";
 }
 
 function getStudentPoint(student) {
@@ -153,7 +160,9 @@ function Icon({ name, size = 20, className = "" }) {
   return <Component size={size} className={className} aria-hidden="true" />;
 }
 
-/* Status Screen */
+/* =========================================================
+   Status Screen
+========================================================= */
 
 function StatusScreen({ type = "pending", student, onLogin }) {
   const pending = type === "pending";
@@ -198,6 +207,7 @@ function StatusScreen({ type = "pending", student, onLogin }) {
                 pending ? "animate-pulse bg-amber-500" : "bg-red-500"
               }`}
             />
+
             {pending ? "অনুমোদনের অপেক্ষায়" : "অ্যাকাউন্ট নিষ্ক্রিয়"}
           </span>
 
@@ -221,6 +231,7 @@ function StatusScreen({ type = "pending", student, onLogin }) {
                 <p className="text-[11px] text-slate-500 dark:text-slate-400">
                   Student ID
                 </p>
+
                 <p className="text-sm font-bold text-[#2C3E50] dark:text-white">
                   {student.studentId || "—"}
                 </p>
@@ -250,7 +261,9 @@ function StatusScreen({ type = "pending", student, onLogin }) {
   );
 }
 
-/* Error Screen */
+/* =========================================================
+   Error Screen
+========================================================= */
 
 function ErrorScreen({ onRetry }) {
   return (
@@ -281,7 +294,9 @@ function ErrorScreen({ onRetry }) {
   );
 }
 
-/* Reusable Stat */
+/* =========================================================
+   Reusable Stat
+========================================================= */
 
 function ProfileStat({ icon: IconComponent, label, value, accent = false }) {
   return (
@@ -300,6 +315,7 @@ function ProfileStat({ icon: IconComponent, label, value, accent = false }) {
         <p className="text-[10px] font-medium text-slate-500 dark:text-slate-400">
           {label}
         </p>
+
         <p className="truncate text-sm font-extrabold text-[#2C3E50] dark:text-white">
           {value ?? "—"}
         </p>
@@ -308,7 +324,9 @@ function ProfileStat({ icon: IconComponent, label, value, accent = false }) {
   );
 }
 
-/* Main Portal */
+/* =========================================================
+   Main Portal
+========================================================= */
 
 export default function Portal() {
   const navigate = useNavigate();
@@ -334,7 +352,9 @@ export default function Portal() {
 
     applyTheme(localStorage.getItem(THEME_KEY) || "light");
 
-    const handleThemeChange = (event) => applyTheme(event.detail);
+    const handleThemeChange = (event) => {
+      applyTheme(event.detail);
+    };
 
     const handleStorageChange = (event) => {
       if (event.key === THEME_KEY) {
@@ -343,10 +363,12 @@ export default function Portal() {
     };
 
     window.addEventListener("topline-theme-change", handleThemeChange);
+
     window.addEventListener("storage", handleStorageChange);
 
     return () => {
       window.removeEventListener("topline-theme-change", handleThemeChange);
+
       window.removeEventListener("storage", handleStorageChange);
     };
   }, []);
@@ -367,15 +389,20 @@ export default function Portal() {
     setInactive(false);
     setApprovalPending(false);
 
+    const studentRef = doc(db, "students", String(session.documentId));
+
     const unsubscribe = onSnapshot(
-      doc(db, "students", session.documentId),
+      studentRef,
 
       (snapshot) => {
         if (!snapshot.exists()) {
           localStorage.removeItem(SESSION_KEY);
+
           setStudent(null);
           setLoading(false);
-          toast.error("শিক্ষার্থীর তথ্য পাওয়া যায়নি।");
+
+          toast.error("শিক্ষার্থীর তথ্য পাওয়া যায়নি.");
+
           navigate("/login", { replace: true });
           return;
         }
@@ -387,19 +414,24 @@ export default function Portal() {
 
         if (String(data.studentId ?? "") !== String(session.studentId)) {
           localStorage.removeItem(SESSION_KEY);
+
           setStudent(null);
           setLoading(false);
+
           toast.error("সেশন যাচাই করা যায়নি। আবার লগইন করুন।");
+
           navigate("/login", { replace: true });
           return;
         }
 
         if (!isStudentActive(data)) {
           localStorage.removeItem(SESSION_KEY);
+
           setStudent(null);
           setInactive(true);
           setApprovalPending(false);
           setLoading(false);
+
           return;
         }
 
@@ -408,6 +440,7 @@ export default function Portal() {
           setApprovalPending(true);
           setInactive(false);
           setLoading(false);
+
           return;
         }
 
@@ -434,10 +467,19 @@ export default function Portal() {
         setInactive(false);
         setLoadError(false);
         setLoading(false);
+
+        // Debug: Firestore currentMark
+        console.log(
+          "Student currentMark:",
+          data.currentMark,
+          "Student ID:",
+          data.studentId,
+        );
       },
 
       (error) => {
         console.error("Portal listener error:", error);
+
         setLoadError(true);
         setLoading(false);
 
@@ -464,7 +506,10 @@ export default function Portal() {
       name: getStudentName(student),
       photo: getStudentPhoto(student),
       program: programKey ? programs[programKey] : null,
+
+      // Always read currentMark from Firestore.
       currentMark: getCurrentMark(student),
+
       point: getStudentPoint(student),
       className: getClassName(student),
       studentId: student.studentId || "—",
@@ -491,13 +536,17 @@ export default function Portal() {
     );
   }
 
-  if (loadError) return <ErrorScreen onRetry={retryLoading} />;
+  if (loadError) {
+    return <ErrorScreen onRetry={retryLoading} />;
+  }
 
   if (approvalPending && student) {
     return <StatusScreen type="pending" student={student} />;
   }
 
-  if (!student || !profile) return <LoadingScreen />;
+  if (!student || !profile) {
+    return <LoadingScreen />;
+  }
 
   const studentRouteId = encodeURIComponent(
     String(profile.documentId || profile.studentId),
@@ -523,11 +572,16 @@ export default function Portal() {
 
     if (item.external) {
       window.open(item.href, "_blank", "noopener,noreferrer");
+
       return;
     }
 
     navigate(item.href);
   }
+
+  /* =======================================================
+     UI
+  ======================================================= */
 
   return (
     <main className="min-h-screen bg-[#F5F7FA] text-slate-800 transition-colors duration-300 dark:bg-slate-950 dark:text-slate-100">
@@ -540,8 +594,6 @@ export default function Portal() {
           <div className="pointer-events-none absolute -bottom-24 left-1/3 h-48 w-48 rounded-full bg-[#E74C3C]/10 blur-3xl" />
 
           <div className="relative p-4 sm:p-6 lg:p-7">
-            {/* Header */}
-
             {/* Main Profile */}
 
             <div className="mt-5 flex flex-col gap-5 sm:flex-row sm:items-center">
@@ -636,7 +688,7 @@ export default function Portal() {
               <ProfileStat
                 icon={FiAward}
                 label="প্রাপ্ত নম্বর"
-                value={profile.currentMark ?? "—"}
+                value={profile.currentMark}
                 accent
               />
 
@@ -662,6 +714,8 @@ export default function Portal() {
         </section>
 
         {/* Widgets */}
+
+        <RunningExamsWidget student={student} />
 
         <div>
           <VocabularyWidget />
@@ -689,6 +743,7 @@ export default function Portal() {
                   <h3 className="text-sm font-extrabold text-emerald-800 dark:text-emerald-300">
                     উপস্থিতি যুক্ত করুন
                   </h3>
+
                   <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">
                     ব্যাচের শিক্ষার্থীদের উপস্থিতি পরিচালনা করুন
                   </p>
@@ -709,10 +764,11 @@ export default function Portal() {
                 key={`${item.href}-${item.label}`}
                 type="button"
                 onClick={() => handleNavigation(item)}
-                style={{ animationDelay: `${index * 45}ms` }}
+                style={{
+                  animationDelay: `${index * 45}ms`,
+                }}
                 className="group relative flex min-h-[145px] animate-[fadeInUp_.4s_ease-out_both] flex-col overflow-hidden rounded-2xl border border-base-300/70 bg-base-100 p-3.5 text-left shadow-sm transition-all duration-300 hover:-translate-y-1 hover:border-primary/40 hover:shadow-xl hover:shadow-primary/5 active:scale-[0.98] sm:min-h-[160px] sm:p-5"
               >
-                {/* Decorative background */}
                 <div className="pointer-events-none absolute -right-8 -top-8 h-28 w-28 rounded-full bg-primary/[0.04] transition-transform duration-500 group-hover:scale-150 group-hover:bg-primary/[0.08]" />
 
                 <div className="relative flex w-full items-start justify-between">
@@ -735,7 +791,6 @@ export default function Portal() {
                   </p>
                 </div>
 
-                {/* Bottom accent */}
                 <div className="absolute bottom-0 left-0 h-[3px] w-0 rounded-full bg-primary transition-all duration-300 group-hover:w-full" />
               </button>
             ))}
@@ -749,6 +804,7 @@ export default function Portal() {
             opacity: 0;
             transform: translateY(10px);
           }
+
           to {
             opacity: 1;
             transform: translateY(0);

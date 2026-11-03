@@ -31,13 +31,13 @@ const toDate = (value) => {
 };
 
 /**
- * পরীক্ষার সময়সূচি অনুযায়ী পরীক্ষা বর্তমানে চালু কি না।
+ * পরীক্ষার সময়সূচি অনুযায়ী পরীক্ষা বর্তমানে চালু কি না।
  *
  * status false হলে পরীক্ষা বন্ধ থাকবে।
  * startTime থেকে পরীক্ষা চালু হবে।
  * finishTime-এ পৌঁছালে পরীক্ষা বন্ধ হবে।
  *
- * এই ফাংশন ManageOnlineExams এবং পরীক্ষায় প্রবেশের
+ * এই ফাংশন ManageOnlineExams এবং পরীক্ষায় প্রবেশের
  * পেজেও ব্যবহার করতে হবে।
  */
 export const isExamAvailableNow = (exam, now = new Date()) => {
@@ -66,19 +66,25 @@ const CreateOnlineExam = () => {
   // নির্বাচিত শ্রেণি বা ব্যাচের ID
   const [selectedClasses, setSelectedClasses] = useState([]);
 
-  // পরীক্ষার সময়
+  // পরীক্ষার সময়
   const [durationMinutes, setDurationMinutes] = useState(30);
   const [durationSeconds, setDurationSeconds] = useState(0);
 
-  // পরীক্ষা শুরু ও শেষ হওয়ার তারিখ-সময়
+  // পরীক্ষা শুরু ও শেষ হওয়ার তারিখ-সময়
   const [startTime, setStartTime] = useState("");
   const [finishTime, setFinishTime] = useState("");
 
   // Admin চাইলে পরীক্ষাটি সম্পূর্ণ বন্ধ রাখতে পারবেন।
-  // চালু থাকলেও নির্ধারিত সময়ের বাইরে পরীক্ষা দেওয়া যাবে না।
+  // চালু থাকলেও নির্ধারিত সময়ের বাইরে পরীক্ষা দেওয়া যাবে না।
   const [status, setStatus] = useState(true);
 
+  // প্রতিটি শিক্ষার্থী যতগুলো প্রশ্নের উত্তর দেবে
   const [requestedCount, setRequestedCount] = useState(10);
+
+  // পূর্ণমান
+  const [fullMarks, setFullMarks] = useState(10);
+
+  // প্রশ্নভান্ডার (এখান থেকে এলোমেলোভাবে প্রশ্ন বাছাই হবে)
   const [questions, setQuestions] = useState([]);
   const [submitting, setSubmitting] = useState(false);
 
@@ -90,6 +96,16 @@ const CreateOnlineExam = () => {
 
   // নির্বাচিত বিভাগের শ্রেণি বা ব্যাচ
   const availableClasses = selectedDepartment?.classes || [];
+
+  // সংখ্যাগুলোর সারাংশ (প্রদর্শনের জন্য)
+  const poolCount = questions.length;
+  const examQuestionCount = Number(requestedCount) || 0;
+  const fullMarksValue = Number(fullMarks) || 0;
+
+  const marksPerQuestion =
+    examQuestionCount > 0
+      ? Math.round((fullMarksValue / examQuestionCount) * 100) / 100
+      : 0;
 
   const handleDepartmentChange = (event) => {
     setDepartmentId(event.target.value);
@@ -122,7 +138,7 @@ const CreateOnlineExam = () => {
     }
 
     if (!subject || !SUBJECTS[subject]) {
-      toast.error("একটি বিষয় নির্বাচন করুন।");
+      toast.error("একটি বিষয় নির্বাচন করুন।");
       return;
     }
 
@@ -140,7 +156,7 @@ const CreateOnlineExam = () => {
       !Number.isInteger(Number(durationMinutes)) ||
       Number(durationMinutes) < 0
     ) {
-      toast.error("পরীক্ষার সময় সঠিকভাবে দিন।");
+      toast.error("পরীক্ষার সময় সঠিকভাবে দিন।");
       return;
     }
 
@@ -154,7 +170,7 @@ const CreateOnlineExam = () => {
     }
 
     if (Number(durationMinutes) === 0 && Number(durationSeconds) === 0) {
-      toast.error("পরীক্ষার সময় শূন্য হতে পারবে না।");
+      toast.error("পরীক্ষার সময় শূন্য হতে পারবে না।");
       return;
     }
 
@@ -166,14 +182,27 @@ const CreateOnlineExam = () => {
       return;
     }
 
+    if (!(Number(fullMarks) > 0)) {
+      toast.error("পূর্ণমান ০-এর বেশি হতে হবে।");
+      return;
+    }
+
     if (questions.length === 0) {
       toast.error("অন্তত একটি প্রশ্ন তৈরি করুন।");
       return;
     }
 
-    // স্বয়ংক্রিয় সময়সূচির জন্য শুরুর ও শেষের সময় আবশ্যক।
+    // প্রশ্নভান্ডারে নির্ধারিত সংখ্যার চেয়ে কম প্রশ্ন থাকলে পরীক্ষা তৈরি হবে না।
+    if (Number(requestedCount) > questions.length) {
+      toast.error(
+        `নির্ধারিত প্রশ্ন ${requestedCount}টি, কিন্তু যোগ করা প্রশ্ন মাত্র ${questions.length}টি।`,
+      );
+      return;
+    }
+
+    // স্বয়ংক্রিয় সময়সূচির জন্য শুরুর ও শেষের সময় আবশ্যক।
     if (!startTime || !finishTime) {
-      toast.error("পরীক্ষার শুরুর ও শেষের তারিখ-সময় নির্ধারণ করুন।");
+      toast.error("পরীক্ষার শুরুর ও শেষের তারিখ-সময় নির্ধারণ করুন।");
       return;
     }
 
@@ -184,12 +213,12 @@ const CreateOnlineExam = () => {
       Number.isNaN(startDate.getTime()) ||
       Number.isNaN(finishDate.getTime())
     ) {
-      toast.error("পরীক্ষার তারিখ ও সময় সঠিক নয়।");
+      toast.error("পরীক্ষার তারিখ ও সময় সঠিক নয়।");
       return;
     }
 
     if (finishDate <= startDate) {
-      toast.error("পরীক্ষা শেষ হওয়ার সময় শুরুর সময়ের পরে হতে হবে।");
+      toast.error("পরীক্ষা শেষ হওয়ার সময় শুরুর সময়ের পরে হতে হবে।");
       return;
     }
 
@@ -242,7 +271,7 @@ const CreateOnlineExam = () => {
         classes: classesToSave,
 
         // পুরোনো পরীক্ষার তালিকার সঙ্গে সামঞ্জস্যের জন্য
-        // participants-এ বিভাগের key রাখা হয়েছে।
+        // participants-এ বিভাগের key রাখা হয়েছে।
         participants: [selectedDepartment.key],
 
         durationMinutes: Number(durationMinutes),
@@ -251,13 +280,20 @@ const CreateOnlineExam = () => {
         startTime: startDate,
         finishTime: finishDate,
 
-        // এটি admin-এর enable/disable নিয়ন্ত্রণ।
-        // সময়সূচি অনুযায়ী চালু কি না তা
-        // isExamAvailableNow() দিয়ে নির্ধারণ করতে হবে।
+        // এটি admin-এর enable/disable নিয়ন্ত্রণ।
+        // সময়সূচি অনুযায়ী চালু কি না তা
+        // isExamAvailableNow() দিয়ে নির্ধারণ করতে হবে।
         status: Boolean(status),
 
+        // প্রতিটি শিক্ষার্থী যতগুলো প্রশ্ন পাবে
         questionCount: Number(requestedCount),
+
+        // প্রশ্নভান্ডারে মোট প্রশ্ন
         totalQuestions: questions.length,
+
+        // পূর্ণমান ও প্রতি প্রশ্নের নম্বর
+        fullMarks: Number(fullMarks),
+        marksPerQuestion: Number(fullMarks) / Number(requestedCount),
 
         questions: questions.map(({ id, ...question }) => ({
           ...question,
@@ -276,7 +312,7 @@ const CreateOnlineExam = () => {
 
       await addDoc(collection(db, "onlineExams"), examData);
 
-      toast.success("অনলাইন পরীক্ষা সফলভাবে তৈরি হয়েছে!");
+      toast.success("অনলাইন পরীক্ষা সফলভাবে তৈরি হয়েছে!");
 
       // ফর্ম রিসেট
       setTitle("");
@@ -293,11 +329,12 @@ const CreateOnlineExam = () => {
 
       setStatus(true);
       setRequestedCount(10);
+      setFullMarks(10);
       setQuestions([]);
     } catch (error) {
       console.error("Create online exam error:", error);
 
-      toast.error("পরীক্ষা তৈরি করা যায়নি। আবার চেষ্টা করুন।");
+      toast.error("পরীক্ষা তৈরি করা যায়নি। আবার চেষ্টা করুন।");
     } finally {
       setSubmitting(false);
     }
@@ -311,7 +348,7 @@ const CreateOnlineExam = () => {
         </h1>
 
         <p className="mt-2 text-sm text-base-content/70">
-          বিভাগ, শ্রেণি বা ব্যাচ, সময়সূচি এবং প্রশ্ন নির্ধারণ করুন।
+          বিভাগ, শ্রেণি বা ব্যাচ, সময়সূচি এবং প্রশ্ন নির্ধারণ করুন।
         </p>
       </div>
 
@@ -337,9 +374,9 @@ const CreateOnlineExam = () => {
               />
             </div>
 
-            <div>
+            <div className="md:col-span-2">
               <label htmlFor="exam-subject" className="label">
-                <span className="label-text font-medium">বিষয় *</span>
+                <span className="label-text font-medium">বিষয় *</span>
               </label>
 
               <select
@@ -349,7 +386,7 @@ const CreateOnlineExam = () => {
                 onChange={(event) => setSubject(event.target.value)}
                 required
               >
-                <option value="">বিষয় নির্বাচন করুন</option>
+                <option value="">বিষয় নির্বাচন করুন</option>
 
                 {Object.entries(SUBJECTS).map(([key, name]) => (
                   <option key={key} value={key}>
@@ -362,7 +399,7 @@ const CreateOnlineExam = () => {
             <div>
               <label htmlFor="question-count" className="label">
                 <span className="label-text font-medium">
-                  নির্ধারিত প্রশ্নসংখ্যা *
+                  পরীক্ষায় আসবে এমন প্রশ্নসংখ্যা *
                 </span>
               </label>
 
@@ -377,8 +414,31 @@ const CreateOnlineExam = () => {
               />
 
               <p className="mt-1 text-xs text-base-content/60">
-                এখানে নির্ধারিত সংখ্যা এবং যোগ করা প্রশ্নের সংখ্যা আলাদাভাবে
-                সংরক্ষণ করা হবে।
+                প্রতিটি শিক্ষার্থী প্রশ্নভান্ডার থেকে এতগুলো প্রশ্ন এলোমেলোভাবে
+                পাবে।
+              </p>
+            </div>
+
+            <div>
+              <label htmlFor="full-marks" className="label">
+                <span className="label-text font-medium">পূর্ণমান *</span>
+              </label>
+
+              <input
+                id="full-marks"
+                type="number"
+                min="1"
+                step="any"
+                className="input input-bordered w-full"
+                value={fullMarks}
+                onChange={(event) => setFullMarks(event.target.value)}
+                required
+              />
+
+              <p className="mt-1 text-xs text-base-content/60">
+                {marksPerQuestion > 0
+                  ? `প্রতিটি প্রশ্নের নম্বর: ${marksPerQuestion}`
+                  : "প্রশ্নসংখ্যা ও পূর্ণমান দিলে প্রতি প্রশ্নের নম্বর দেখা যাবে।"}
               </p>
             </div>
 
@@ -390,7 +450,7 @@ const CreateOnlineExam = () => {
               <textarea
                 id="exam-syllabus"
                 className="textarea textarea-bordered min-h-24 w-full"
-                placeholder="কোন কোন অধ্যায় বা বিষয় থেকে পরীক্ষা হবে?"
+                placeholder="কোন কোন অধ্যায় বা বিষয় থেকে পরীক্ষা হবে?"
                 value={syllabus}
                 onChange={(event) => setSyllabus(event.target.value)}
               />
@@ -467,7 +527,7 @@ const CreateOnlineExam = () => {
               </div>
             ) : (
               <div className="alert alert-warning">
-                এই বিভাগের জন্য কোনো শ্রেণি বা ব্যাচ পাওয়া যায়নি।
+                এই বিভাগের জন্য কোনো শ্রেণি বা ব্যাচ পাওয়া যায়নি।
               </div>
             )}
 
@@ -477,20 +537,20 @@ const CreateOnlineExam = () => {
           </section>
         )}
 
-        {/* সময় ও সময়সূচি */}
+        {/* সময় ও সময়সূচি */}
         <section className="rounded-xl border border-base-300 bg-base-100 p-4 shadow-sm md:p-6">
-          <h2 className="mb-2 text-lg font-semibold">সময় ও সময়সূচি</h2>
+          <h2 className="mb-2 text-lg font-semibold">সময় ও সময়সূচি</h2>
 
           <p className="mb-4 text-sm text-base-content/70">
-            নির্ধারিত শুরুর সময় থেকে পরীক্ষা চালু হবে এবং শেষের সময়ে
-            স্বয়ংক্রিয়ভাবে বন্ধ বলে গণ্য হবে।
+            নির্ধারিত শুরুর সময় থেকে পরীক্ষা চালু হবে এবং শেষের সময়ে
+            স্বয়ংক্রিয়ভাবে বন্ধ বলে গণ্য হবে।
           </p>
 
           <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
             <div>
               <label htmlFor="duration-minutes" className="label">
                 <span className="label-text font-medium">
-                  পরীক্ষার সময় (মিনিট) *
+                  পরীক্ষার সময় (মিনিট) *
                 </span>
               </label>
 
@@ -508,7 +568,7 @@ const CreateOnlineExam = () => {
             <div>
               <label htmlFor="duration-seconds" className="label">
                 <span className="label-text font-medium">
-                  অতিরিক্ত সময় (সেকেন্ড)
+                  অতিরিক্ত সময় (সেকেন্ড)
                 </span>
               </label>
 
@@ -526,7 +586,7 @@ const CreateOnlineExam = () => {
             <div>
               <label htmlFor="start-time" className="label">
                 <span className="label-text font-medium">
-                  পরীক্ষা শুরুর তারিখ ও সময় *
+                  পরীক্ষা শুরুর তারিখ ও সময় *
                 </span>
               </label>
 
@@ -543,7 +603,7 @@ const CreateOnlineExam = () => {
             <div>
               <label htmlFor="finish-time" className="label">
                 <span className="label-text font-medium">
-                  পরীক্ষা শেষের তারিখ ও সময় *
+                  পরীক্ষা শেষের তারিখ ও সময় *
                 </span>
               </label>
 
@@ -560,23 +620,23 @@ const CreateOnlineExam = () => {
 
           <div className="alert alert-info mt-4 text-sm">
             <span>
-              শুরুর সময়ের আগে পরীক্ষা দেওয়া যাবে না। শেষের সময়ের পরেও পরীক্ষা
-              দেওয়া যাবে না—তবে পরীক্ষার তালিকা ও পরীক্ষা দেওয়ার পেজে সময়সূচির
-              যাচাই যুক্ত থাকতে হবে।
+              শুরুর সময়ের আগে পরীক্ষা দেওয়া যাবে না। শেষের সময়ের পরেও পরীক্ষা
+              দেওয়া যাবে না—তবে পরীক্ষার তালিকা ও পরীক্ষা দেওয়ার পেজে
+              সময়সূচির যাচাই যুক্ত থাকতে হবে।
             </span>
           </div>
         </section>
 
         {/* পরীক্ষা চালু/বন্ধ */}
         <section className="rounded-xl border border-base-300 bg-base-100 p-4 shadow-sm md:p-6">
-          <h2 className="mb-4 text-lg font-semibold">পরীক্ষার নিয়ন্ত্রণ</h2>
+          <h2 className="mb-4 text-lg font-semibold">পরীক্ষার নিয়ন্ত্রণ</h2>
 
           <label className="flex cursor-pointer items-center justify-between gap-4 rounded-lg border border-base-300 p-4">
             <div>
               <p className="font-medium">পরীক্ষা চালু রাখুন</p>
 
               <p className="mt-1 text-sm text-base-content/60">
-                বন্ধ করলে নির্ধারিত সময়ের মধ্যেও পরীক্ষা দেওয়া যাবে না।
+                বন্ধ করলে নির্ধারিত সময়ের মধ্যেও পরীক্ষা দেওয়া যাবে না।
               </p>
             </div>
 
@@ -591,20 +651,64 @@ const CreateOnlineExam = () => {
 
         {/* প্রশ্ন */}
         <section className="rounded-xl border border-base-300 bg-base-100 p-4 shadow-sm md:p-6">
-          <h2 className="mb-2 text-lg font-semibold">পরীক্ষার প্রশ্ন</h2>
+          <h2 className="mb-2 text-lg font-semibold">প্রশ্নভান্ডার</h2>
 
           <p className="mb-4 text-sm text-base-content/70">
-            প্রশ্ন যোগ করুন এবং প্রতিটি প্রশ্নের সঠিক উত্তর নির্বাচন করুন।
+            এখানে যত খুশি প্রশ্ন যোগ করা যাবে। পরীক্ষার সময় প্রতিটি শিক্ষার্থী
+            এখান থেকে নির্ধারিত সংখ্যক প্রশ্ন এলোমেলোভাবে পাবে।
           </p>
+
+          {/* সংখ্যার সারাংশ */}
+          <div className="mb-4 grid grid-cols-1 gap-3 sm:grid-cols-3">
+            <div className="rounded-lg bg-base-200 p-3 text-center">
+              <p className="text-xs text-base-content/60">
+                প্রশ্নভান্ডারে মোট প্রশ্ন
+              </p>
+              <p className="mt-1 text-2xl font-bold">{poolCount}</p>
+            </div>
+
+            <div className="rounded-lg bg-base-200 p-3 text-center">
+              <p className="text-xs text-base-content/60">
+                প্রতি শিক্ষার্থী পাবে
+              </p>
+              <p className="mt-1 text-2xl font-bold">{examQuestionCount}</p>
+            </div>
+
+            <div className="rounded-lg bg-base-200 p-3 text-center">
+              <p className="text-xs text-base-content/60">
+                পূর্ণমান / প্রতি প্রশ্নে
+              </p>
+              <p className="mt-1 text-2xl font-bold">
+                {fullMarksValue} / {marksPerQuestion}
+              </p>
+            </div>
+          </div>
+
+          {poolCount > 0 && poolCount < examQuestionCount && (
+            <div className="alert alert-warning mb-4 text-sm">
+              <span>
+                পরীক্ষায় {examQuestionCount}টি প্রশ্ন নির্ধারিত, কিন্তু
+                প্রশ্নভান্ডারে আছে মাত্র {poolCount}টি। আরও{" "}
+                {examQuestionCount - poolCount}টি প্রশ্ন যোগ করুন অথবা
+                প্রশ্নসংখ্যা কমান।
+              </span>
+            </div>
+          )}
+
+          {poolCount > examQuestionCount && examQuestionCount > 0 && (
+            <div className="alert alert-info mb-4 text-sm">
+              <span>
+                প্রশ্নভান্ডারে {poolCount}টি প্রশ্ন আছে। প্রতিটি শিক্ষার্থী
+                এলোমেলোভাবে {examQuestionCount}টি প্রশ্ন পাবে, তাই একেকজনের
+                প্রশ্ন আলাদা হবে।
+              </span>
+            </div>
+          )}
 
           <OnlineExamQuestions
             questions={questions}
             setQuestions={setQuestions}
           />
-
-          <div className="mt-4 rounded-lg bg-base-200 p-3 text-sm">
-            যোগ করা প্রশ্ন: <strong>{questions.length}</strong>
-          </div>
         </section>
 
         {/* তৈরি করুন */}

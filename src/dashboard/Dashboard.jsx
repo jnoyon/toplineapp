@@ -106,6 +106,15 @@ const dashboardMenus = [
     roles: ["admin"],
   },
   {
+    title: "পরীক্ষার ফলাফল দেখুন",
+    subtitle: "Online Exam",
+    path: "/admin/online-exam-results",
+    icon: MdSettings,
+    color: "text-slate-500",
+    background: "bg-slate-500/10",
+    roles: ["admin"],
+  },
+  {
     title: "রিপোর্ট প্রিন্ট",
     subtitle: "মাসিক মূল্যায়ণ রিপোর্ট",
     path: "/monthly-report",
@@ -138,125 +147,9 @@ export default function Dashboard() {
   return (
     <main className="min-h-screen bg-base-200/50 px-4 py-6 text-base-content transition-colors duration-300 sm:px-6 lg:px-8">
       <div className="mx-auto max-w-7xl">
-        {/* Profile card */}
-        <section className="profile-enter relative mb-8 overflow-hidden rounded-3xl border border-base-300 bg-base-100 shadow-sm">
-          <div className="pointer-events-none absolute -right-16 -top-24 h-64 w-64 rounded-full bg-primary/10 blur-3xl" />
-          <div className="pointer-events-none absolute -bottom-24 left-1/3 h-48 w-48 rounded-full bg-secondary/10 blur-3xl" />
-
-          <div className="relative p-5 sm:p-7 lg:p-8">
-            <div className="flex flex-col gap-6 sm:flex-row sm:items-center sm:justify-between">
-              <div className="flex min-w-0 items-center gap-4 sm:gap-5">
-                {/* Profile image */}
-                <div className="relative shrink-0">
-                  <div className="grid h-[76px] w-[76px] place-items-center overflow-hidden rounded-2xl bg-primary/10 text-3xl font-black text-primary ring-1 ring-primary/20 sm:h-24 sm:w-24">
-                    {photo ? (
-                      <img
-                        src={photo}
-                        alt={name}
-                        className="h-full w-full object-cover"
-                      />
-                    ) : (
-                      name.trim().charAt(0).toUpperCase() || "U"
-                    )}
-                  </div>
-
-                  <span
-                    className={`absolute -bottom-1 -right-1 h-5 w-5 rounded-full border-4 border-base-100 ${
-                      isActive ? "bg-success" : "bg-error"
-                    }`}
-                    title={isActive ? "সক্রিয়" : "নিষ্ক্রিয়"}
-                  />
-                </div>
-
-                {/* Profile information */}
-                <div className="min-w-0">
-                  <div className="mb-2 flex flex-wrap items-center gap-2">
-                    <span className="text-xs font-extrabold uppercase tracking-[0.18em] text-primary">
-                      TOPLINE EDUCATION
-                    </span>
-                    <MdVerified className="text-primary" size={17} />
-                  </div>
-
-                  <h1 className="truncate text-2xl font-black tracking-tight sm:text-3xl">
-                    {name}
-                  </h1>
-
-                  <div className="mt-2 flex flex-wrap items-center gap-2">
-                    <span className="inline-flex items-center gap-1.5 rounded-full bg-primary/10 px-3 py-1.5 text-xs font-bold text-primary">
-                      <MdShield size={15} />
-                      {roleNames[role] || "ব্যবহারকারী"}
-                    </span>
-
-                    <span className="inline-flex items-center gap-1.5 text-xs font-medium text-base-content/60">
-                      <span
-                        className={`h-2 w-2 rounded-full ${
-                          isActive ? "bg-success" : "bg-error"
-                        }`}
-                      />
-                      {isActive ? "অ্যাকাউন্ট সক্রিয়" : "অ্যাকাউন্ট নিষ্ক্রিয়"}
-                    </span>
-                  </div>
-
-                  {email && (
-                    <p className="mt-2 flex min-w-0 items-center gap-1.5 text-sm text-base-content/55">
-                      <MdEmail className="shrink-0" />
-                      <span className="truncate">{email}</span>
-                    </p>
-                  )}
-                </div>
-              </div>
-
-              {/* Dashboard summary */}
-              <div className="flex items-center gap-3 rounded-2xl border border-base-300 bg-base-200/70 p-4 sm:min-w-48">
-                <div className="grid h-12 w-12 shrink-0 place-items-center rounded-xl bg-primary text-primary-content shadow-lg shadow-primary/20">
-                  <MdDashboard size={25} />
-                </div>
-
-                <div>
-                  <p className="text-xs font-medium text-base-content/55">
-                    আপনার ড্যাশবোর্ড
-                  </p>
-                  <p className="mt-0.5 text-xl font-black">
-                    {menus.length}টি বিভাগ
-                  </p>
-                </div>
-              </div>
-            </div>
-
-            <div className="mt-6 flex items-start gap-2 border-t border-base-300 pt-4 text-sm text-base-content/65">
-              <MdPerson className="mt-0.5 shrink-0 text-primary" size={19} />
-              <p>
-                স্বাগতম,{" "}
-                <span className="font-bold text-base-content">{name}</span>।
-                আপনার প্রয়োজনীয় কাজ এখান থেকেই পরিচালনা করুন।
-              </p>
-            </div>
-          </div>
-
-          <div className="h-1 w-full bg-gradient-to-r from-primary via-secondary to-transparent" />
-        </section>
-
-        {/* Menu heading */}
-        <section className="mb-5 flex items-end justify-between gap-3">
-          <div>
-            <p className="mb-1 text-xs font-bold uppercase tracking-[0.2em] text-primary">
-              QUICK ACCESS
-            </p>
-            <h2 className="text-xl font-black sm:text-2xl">আপনার মেনু</h2>
-            <p className="mt-1 text-sm text-base-content/60">
-              প্রয়োজনীয় বিভাগ নির্বাচন করে কাজ শুরু করুন।
-            </p>
-          </div>
-
-          <span className="hidden items-center gap-2 rounded-full border border-base-300 bg-base-100 px-3 py-2 text-xs font-semibold text-base-content/60 sm:inline-flex">
-            <span className="h-2 w-2 animate-pulse rounded-full bg-success" />
-            {menus.length}টি বিভাগ
-          </span>
-        </section>
-
         {/* Menu cards */}
         {menus.length > 0 ? (
-          <section className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
+          <section className="grid grid-cols-2 gap-2 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
             {menus.map((menu, index) => {
               const Icon = menu.icon;
 
@@ -301,14 +194,6 @@ export default function Dashboard() {
             </p>
           </section>
         )}
-
-        {/* Footer */}
-        <footer className="mt-10 border-t border-base-300 py-5 text-center text-xs font-medium tracking-wide text-base-content/45">
-          <span className="font-extrabold text-base-content">TOPLINE</span>{" "}
-          EDUCATION
-          <span className="mx-2 text-primary">•</span>
-          LEARN · GROW · SUCCEED
-        </footer>
       </div>
 
       <style>{`

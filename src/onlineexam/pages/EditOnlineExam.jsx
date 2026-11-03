@@ -85,19 +85,24 @@ export default function EditOnlineExam() {
   // নির্বাচিত শ্রেণি/ব্যাচের ID
   const [selectedClasses, setSelectedClasses] = useState([]);
 
-  // পরীক্ষার সময়
+  // পরীক্ষার সময়
   const [minutes, setMinutes] = useState("30");
   const [seconds, setSeconds] = useState("0");
 
-  // পরীক্ষার তারিখ ও সময়
+  // পরীক্ষার তারিখ ও সময়
   const [startTime, setStartTime] = useState("");
   const [finishTime, setFinishTime] = useState("");
 
   // পরীক্ষার Status
   const [status, setStatus] = useState(true);
 
-  // প্রশ্ন
+  // প্রতিটি শিক্ষার্থী যতগুলো প্রশ্ন পাবে
   const [questionCount, setQuestionCount] = useState("10");
+
+  // পূর্ণমান
+  const [fullMarks, setFullMarks] = useState("10");
+
+  // প্রশ্নভান্ডার
   const [questions, setQuestions] = useState([]);
 
   // নির্বাচিত বিভাগের তথ্য
@@ -109,12 +114,18 @@ export default function EditOnlineExam() {
   // নির্বাচিত বিভাগের শ্রেণি/ব্যাচ
   const availableClasses = selectedDepartment?.classes || [];
 
+  // প্রতি প্রশ্নের নম্বর (প্রদর্শনের জন্য)
+  const marksPerQuestion =
+    Number(questionCount) > 0
+      ? Math.round((Number(fullMarks) / Number(questionCount)) * 100) / 100
+      : 0;
+
   useEffect(() => {
     let cancelled = false;
 
     async function loadExam() {
       if (!examId) {
-        toast.error("পরীক্ষার ID পাওয়া যায়নি।");
+        toast.error("পরীক্ষার ID পাওয়া যায়নি।");
         navigate("/manage-exams", { replace: true });
         return;
       }
@@ -125,7 +136,7 @@ export default function EditOnlineExam() {
         if (cancelled) return;
 
         if (!snapshot.exists()) {
-          toast.error("পরীক্ষাটি পাওয়া যায়নি।");
+          toast.error("পরীক্ষাটি পাওয়া যায়নি।");
           navigate("/manage-exams", { replace: true });
           return;
         }
@@ -139,7 +150,7 @@ export default function EditOnlineExam() {
         );
         setSyllabus(exam.syllabus ?? "");
 
-        // পুরোনো এবং নতুন উভয় ধরনের পরীক্ষার তথ্য থেকে বিভাগ শনাক্ত করা।
+        // পুরোনো এবং নতুন উভয় ধরনের পরীক্ষার তথ্য থেকে বিভাগ শনাক্ত করা।
         const savedDepartment =
           departmentList.find(
             (department) => String(department.id) === String(exam.departmentId),
@@ -169,7 +180,7 @@ export default function EditOnlineExam() {
           }
 
           // Firestore-এ ID string বা number যেভাবেই থাকুক,
-          // বিভাগের ID-এর সঙ্গে মিলিয়ে নেওয়া হবে।
+          // বিভাগের ID-এর সঙ্গে মিলিয়ে নেওয়া হবে।
           savedClassIds = savedClassIds
             .map(String)
             .filter((id) => departmentClassIds.includes(id));
@@ -180,7 +191,7 @@ export default function EditOnlineExam() {
           setSelectedClasses([]);
         }
 
-        // পরীক্ষার সময়
+        // পরীক্ষার সময়
         setMinutes(String(exam.durationMinutes ?? 30));
         setSeconds(String(exam.durationSeconds ?? 0));
 
@@ -189,24 +200,28 @@ export default function EditOnlineExam() {
 
         setStatus(exam.status !== false);
 
-        // প্রশ্নসংখ্যা
+        // প্রশ্নসংখ্যা ও পূর্ণমান
         const savedQuestions = Array.isArray(exam.questions)
           ? exam.questions
           : [];
 
-        setQuestionCount(
-          String(exam.questionCount ?? savedQuestions.length ?? 1),
-        );
+        const savedQuestionCount =
+          exam.questionCount ?? savedQuestions.length ?? 1;
 
-        // প্রশ্ন ও অপশন
+        setQuestionCount(String(savedQuestionCount));
+
+        // পুরোনো পরীক্ষায় fullMarks না থাকলে প্রশ্নসংখ্যার সমান ধরা হবে।
+        setFullMarks(String(exam.fullMarks ?? savedQuestionCount ?? 10));
+
+        // প্রশ্ন ও অপশন (অপশন যতগুলো সংরক্ষিত আছে ততগুলোই থাকবে)
         setQuestions(
           savedQuestions.map((question, index) => ({
             id: question.id || `existing-${index}-${Date.now()}`,
             question: question.question ?? "",
-            options: Array.from(
-              { length: 4 },
-              (_, optionIndex) => question.options?.[optionIndex] ?? "",
-            ),
+            options:
+              Array.isArray(question.options) && question.options.length >= 2
+                ? question.options.map((option) => option ?? "")
+                : ["", "", "", ""],
             correctAnswer: Number(question.correctAnswer ?? 0),
             explanation: question.explanation ?? "",
           })),
@@ -215,7 +230,7 @@ export default function EditOnlineExam() {
         console.error("Load exam for editing error:", error);
 
         if (!cancelled) {
-          toast.error("পরীক্ষার তথ্য লোড করা যায়নি।");
+          toast.error("পরীক্ষার তথ্য লোড করা যায়নি।");
         }
       } finally {
         if (!cancelled) {
@@ -252,7 +267,7 @@ export default function EditOnlineExam() {
     event.preventDefault();
 
     if (!examId) {
-      toast.error("পরীক্ষার ID পাওয়া যায়নি।");
+      toast.error("পরীক্ষার ID পাওয়া যায়নি।");
       return;
     }
 
@@ -262,7 +277,7 @@ export default function EditOnlineExam() {
     }
 
     if (!SUBJECTS[subject]) {
-      toast.error("একটি বিষয় নির্বাচন করুন।");
+      toast.error("একটি বিষয় নির্বাচন করুন।");
       return;
     }
 
@@ -277,7 +292,7 @@ export default function EditOnlineExam() {
     }
 
     if (!Number.isInteger(Number(minutes)) || Number(minutes) < 0) {
-      toast.error("পরীক্ষার সময় সঠিকভাবে লিখুন।");
+      toast.error("পরীক্ষার সময় সঠিকভাবে লিখুন।");
       return;
     }
 
@@ -291,7 +306,7 @@ export default function EditOnlineExam() {
     }
 
     if (Number(minutes) * 60 + Number(seconds) <= 0) {
-      toast.error("পরীক্ষার সময় শূন্য হতে পারবে না।");
+      toast.error("পরীক্ষার সময় শূন্য হতে পারবে না।");
       return;
     }
 
@@ -302,6 +317,11 @@ export default function EditOnlineExam() {
       return;
     }
 
+    if (!(Number(fullMarks) > 0)) {
+      toast.error("পূর্ণমান ০-এর বেশি হতে হবে।");
+      return;
+    }
+
     if (questions.length === 0) {
       toast.error("কমপক্ষে একটি প্রশ্ন তৈরি করুন।");
       return;
@@ -309,13 +329,13 @@ export default function EditOnlineExam() {
 
     if (requestedCount > questions.length) {
       toast.error(
-        "দেখানোর প্রশ্নের সংখ্যা তৈরি করা প্রশ্নের চেয়ে বেশি হতে পারবে না।",
+        `নির্ধারিত প্রশ্ন ${requestedCount}টি, কিন্তু প্রশ্নভান্ডারে আছে মাত্র ${questions.length}টি।`,
       );
       return;
     }
 
     if (!startTime || !finishTime) {
-      toast.error("পরীক্ষার শুরুর ও শেষের তারিখ-সময় নির্ধারণ করুন।");
+      toast.error("পরীক্ষার শুরুর ও শেষের তারিখ-সময় নির্ধারণ করুন।");
       return;
     }
 
@@ -326,12 +346,12 @@ export default function EditOnlineExam() {
       Number.isNaN(startDate.getTime()) ||
       Number.isNaN(finishDate.getTime())
     ) {
-      toast.error("পরীক্ষার তারিখ ও সময় সঠিক নয়।");
+      toast.error("পরীক্ষার তারিখ ও সময় সঠিক নয়।");
       return;
     }
 
     if (finishDate <= startDate) {
-      toast.error("পরীক্ষার শেষ সময় শুরুর সময়ের পরে হতে হবে।");
+      toast.error("পরীক্ষার শেষ সময় শুরুর সময়ের পরে হতে হবে।");
       return;
     }
 
@@ -341,16 +361,16 @@ export default function EditOnlineExam() {
       return (
         !question.question?.trim() ||
         !Array.isArray(options) ||
-        options.length !== 4 ||
+        options.length < 2 ||
         options.some((option) => !String(option ?? "").trim()) ||
         !Number.isInteger(Number(question.correctAnswer)) ||
         Number(question.correctAnswer) < 0 ||
-        Number(question.correctAnswer) > 3
+        Number(question.correctAnswer) >= options.length
       );
     });
 
     if (invalidQuestion) {
-      toast.error("প্রতিটি প্রশ্নের লেখা, চারটি অপশন ও সঠিক উত্তর পূরণ করুন।");
+      toast.error("প্রতিটি প্রশ্নের লেখা, সব অপশন ও সঠিক উত্তর পূরণ করুন।");
       return;
     }
 
@@ -385,7 +405,7 @@ export default function EditOnlineExam() {
         // পুরোনো পরীক্ষার তালিকার সঙ্গে সামঞ্জস্য
         participants: [selectedDepartment.key],
 
-        // পরীক্ষার সময়
+        // পরীক্ষার সময়
         durationMinutes: Number(minutes),
         durationSeconds: Number(seconds),
 
@@ -395,9 +415,15 @@ export default function EditOnlineExam() {
         // On/Off
         status: Boolean(status),
 
-        // প্রশ্নসংক্রান্ত তথ্য
+        // প্রতিটি শিক্ষার্থী যতগুলো প্রশ্ন পাবে
         questionCount: requestedCount,
+
+        // প্রশ্নভান্ডারে মোট প্রশ্ন
         totalQuestions: questions.length,
+
+        // পূর্ণমান ও প্রতি প্রশ্নের নম্বর
+        fullMarks: Number(fullMarks),
+        marksPerQuestion: Number(fullMarks) / requestedCount,
 
         questions: questions.map(({ id, ...question }) => ({
           ...question,
@@ -412,7 +438,7 @@ export default function EditOnlineExam() {
 
       await updateDoc(doc(db, "onlineExams", examId), examData);
 
-      toast.success("পরীক্ষার পরিবর্তন সফলভাবে সংরক্ষণ হয়েছে।");
+      toast.success("পরীক্ষার পরিবর্তন সফলভাবে সংরক্ষণ হয়েছে।");
 
       navigate("/manage-exams");
     } catch (error) {
@@ -421,7 +447,7 @@ export default function EditOnlineExam() {
       toast.error(
         error?.code === "permission-denied"
           ? "পরীক্ষা আপডেট করার অনুমতি নেই।"
-          : "পরীক্ষা আপডেট করা যায়নি। আবার চেষ্টা করুন।",
+          : "পরীক্ষা আপডেট করা যায়নি। আবার চেষ্টা করুন।",
       );
     } finally {
       setSaving(false);
@@ -451,7 +477,7 @@ export default function EditOnlineExam() {
             type="button"
             onClick={() => navigate("/manage-exams")}
             className="flex h-11 w-11 items-center justify-center rounded-xl border border-slate-200 bg-white transition hover:bg-slate-100 dark:border-slate-700 dark:bg-slate-900 dark:hover:bg-slate-800"
-            aria-label="পরীক্ষার তালিকায় ফিরে যান"
+            aria-label="পরীক্ষার তালিকায় ফিরে যান"
           >
             <FiArrowLeft size={20} />
           </button>
@@ -473,7 +499,7 @@ export default function EditOnlineExam() {
             <SectionTitle
               icon={FiFileText}
               title="পরীক্ষার তথ্য"
-              description="পরীক্ষার নাম, বিষয় ও সিলেবাস সম্পাদনা করুন।"
+              description="পরীক্ষার নাম, বিষয়, প্রশ্নসংখ্যা, পূর্ণমান ও সিলেবাস সম্পাদনা করুন।"
             />
 
             <div className="grid gap-5 sm:grid-cols-2">
@@ -491,9 +517,9 @@ export default function EditOnlineExam() {
                 />
               </div>
 
-              <div>
+              <div className="sm:col-span-2">
                 <label htmlFor="exam-subject" className={labelClass}>
-                  বিষয় *
+                  বিষয় *
                 </label>
 
                 <select
@@ -513,7 +539,7 @@ export default function EditOnlineExam() {
 
               <div>
                 <label htmlFor="question-count" className={labelClass}>
-                  দেখানোর প্রশ্ন সংখ্যা *
+                  প্রতি শিক্ষার্থী যতগুলো প্রশ্ন পাবে *
                 </label>
 
                 <input
@@ -528,7 +554,28 @@ export default function EditOnlineExam() {
                 />
 
                 <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">
-                  তৈরি করা প্রশ্ন: {questions.length}
+                  প্রশ্নভান্ডারে মোট: {questions.length}
+                </p>
+              </div>
+
+              <div>
+                <label htmlFor="full-marks" className={labelClass}>
+                  পূর্ণমান *
+                </label>
+
+                <input
+                  id="full-marks"
+                  type="number"
+                  min="1"
+                  step="any"
+                  value={fullMarks}
+                  onChange={(event) => setFullMarks(event.target.value)}
+                  className={inputClass}
+                  required
+                />
+
+                <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">
+                  প্রতি প্রশ্নে নম্বর: {marksPerQuestion}
                 </p>
               </div>
 
@@ -626,7 +673,7 @@ export default function EditOnlineExam() {
                 </div>
               ) : (
                 <p className="rounded-xl bg-amber-50 p-4 text-sm text-amber-800 dark:bg-amber-950/30 dark:text-amber-200">
-                  এই বিভাগের জন্য কোনো শ্রেণি বা ব্যাচ পাওয়া যায়নি।
+                  এই বিভাগের জন্য কোনো শ্রেণি বা ব্যাচ পাওয়া যায়নি।
                 </p>
               )}
 
@@ -637,18 +684,18 @@ export default function EditOnlineExam() {
             </section>
           )}
 
-          {/* সময় ও Status */}
+          {/* সময় ও Status */}
           <section className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm dark:border-slate-800 dark:bg-slate-900 sm:p-6">
             <SectionTitle
               icon={FiClock}
-              title="সময় ও Status"
-              description="পরীক্ষার সময়সীমা এবং চালু/বন্ধ অবস্থা পরিবর্তন করুন।"
+              title="সময় ও Status"
+              description="পরীক্ষার সময়সীমা এবং চালু/বন্ধ অবস্থা পরিবর্তন করুন।"
             />
 
             <div className="grid gap-5 sm:grid-cols-2">
               <div>
                 <label htmlFor="duration-minutes" className={labelClass}>
-                  পরীক্ষার সময় — মিনিট *
+                  পরীক্ষার সময় — মিনিট *
                 </label>
 
                 <input
@@ -664,7 +711,7 @@ export default function EditOnlineExam() {
 
               <div>
                 <label htmlFor="duration-seconds" className={labelClass}>
-                  অতিরিক্ত সময় — সেকেন্ড *
+                  অতিরিক্ত সময় — সেকেন্ড *
                 </label>
 
                 <input
@@ -683,7 +730,7 @@ export default function EditOnlineExam() {
                 <label htmlFor="exam-start" className={labelClass}>
                   <span className="inline-flex items-center gap-2">
                     <FiCalendar size={15} />
-                    পরীক্ষা শুরুর তারিখ ও সময় *
+                    পরীক্ষা শুরুর তারিখ ও সময় *
                   </span>
                 </label>
 
@@ -701,7 +748,7 @@ export default function EditOnlineExam() {
                 <label htmlFor="exam-finish" className={labelClass}>
                   <span className="inline-flex items-center gap-2">
                     <FiCalendar size={15} />
-                    পরীক্ষা শেষের তারিখ ও সময় *
+                    পরীক্ষা শেষের তারিখ ও সময় *
                   </span>
                 </label>
 
@@ -749,22 +796,55 @@ export default function EditOnlineExam() {
             </div>
           </section>
 
-          {/* প্রশ্ন */}
+          {/* প্রশ্নভান্ডার */}
           <section className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm dark:border-slate-800 dark:bg-slate-900 sm:p-6">
             <SectionTitle
               icon={FiFileText}
-              title="পরীক্ষার প্রশ্ন"
-              description="প্রশ্ন, অপশন, সঠিক উত্তর ও ব্যাখ্যা সম্পাদনা করুন।"
+              title="প্রশ্নভান্ডার"
+              description="প্রশ্ন, অপশন, সঠিক উত্তর ও ব্যাখ্যা সম্পাদনা করুন। শিক্ষার্থীরা এখান থেকে এলোমেলোভাবে নির্ধারিত সংখ্যক প্রশ্ন পাবে।"
             />
+
+            {/* সংখ্যার সারাংশ */}
+            <div className="mb-4 grid grid-cols-1 gap-3 sm:grid-cols-3">
+              <div className="rounded-xl bg-slate-50 p-3 text-center dark:bg-slate-800">
+                <p className="text-xs text-slate-500 dark:text-slate-400">
+                  প্রশ্নভান্ডারে মোট
+                </p>
+                <p className="mt-1 text-2xl font-bold">{questions.length}</p>
+              </div>
+
+              <div className="rounded-xl bg-slate-50 p-3 text-center dark:bg-slate-800">
+                <p className="text-xs text-slate-500 dark:text-slate-400">
+                  প্রতি শিক্ষার্থী পাবে
+                </p>
+                <p className="mt-1 text-2xl font-bold">
+                  {Number(questionCount) || 0}
+                </p>
+              </div>
+
+              <div className="rounded-xl bg-slate-50 p-3 text-center dark:bg-slate-800">
+                <p className="text-xs text-slate-500 dark:text-slate-400">
+                  পূর্ণমান / প্রতি প্রশ্নে
+                </p>
+                <p className="mt-1 text-2xl font-bold">
+                  {Number(fullMarks) || 0} / {marksPerQuestion}
+                </p>
+              </div>
+            </div>
+
+            {questions.length > 0 &&
+              questions.length < (Number(questionCount) || 0) && (
+                <p className="mb-4 rounded-xl bg-amber-50 p-4 text-sm text-amber-800 dark:bg-amber-950/30 dark:text-amber-200">
+                  প্রশ্নভান্ডারে আছে {questions.length}টি, কিন্তু{" "}
+                  {Number(questionCount)}টি নির্ধারিত। আরও প্রশ্ন যোগ করুন অথবা
+                  প্রশ্নসংখ্যা কমান।
+                </p>
+              )}
 
             <OnlineExamQuestions
               questions={questions}
               setQuestions={setQuestions}
             />
-
-            <div className="mt-4 rounded-xl bg-slate-50 p-3 text-sm dark:bg-slate-800">
-              মোট প্রশ্ন: <strong>{questions.length}</strong>
-            </div>
           </section>
 
           {/* Actions */}

@@ -47,6 +47,7 @@ import Vocabularies from "./sheet/basic-english/Vocabularies";
 import Sheet from "./pages/Sheet";
 import Degree from "./sheet/basic-english/Degree";
 import Tense from "./sheet/basic-english/tense/Tense";
+import ExamResults from "../onlineexam/pages/ExamResults";
 
 const STUDENT_SESSION_KEY = "studentSession";
 
@@ -182,6 +183,7 @@ export default function Router() {
           <Route path="/admin/subjects" element={<Subjects />} />
           <Route path="/monthly-report" element={<MonthlyReport />} />
           <Route path="/admin/villages" element={<AddVillage />} />
+          <Route path="admin/online-exam-results" element={<ExamResults />} />
         </Route>
 
         {/* Student management and academic administration */}
