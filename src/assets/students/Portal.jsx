@@ -32,6 +32,7 @@ import VocabularyWidget from "../components/widget/VocabularyWidget";
 import VerbWidget from "../components/widget/VerbWidget";
 import Leaderboard from "../components/Leaderboard";
 import RunningExamsWidget from "./RunningExamsWidget";
+import WordWidget from "../components/widget/WordWidget";
 
 const SESSION_KEY = "studentSession";
 const THEME_KEY = "topline-theme";
@@ -467,14 +468,6 @@ export default function Portal() {
         setInactive(false);
         setLoadError(false);
         setLoading(false);
-
-        // Debug: Firestore currentMark
-        console.log(
-          "Student currentMark:",
-          data.currentMark,
-          "Student ID:",
-          data.studentId,
-        );
       },
 
       (error) => {
@@ -717,10 +710,13 @@ export default function Portal() {
 
         <RunningExamsWidget student={student} />
 
-        <div>
-          <VocabularyWidget />
-          <VerbWidget />
-        </div>
+        {["batch1", "batch2"].includes(student.batchId) && (
+          <div>
+            <VocabularyWidget />
+            <VerbWidget />
+            <WordWidget />
+          </div>
+        )}
 
         {/* Leaderboard */}
 

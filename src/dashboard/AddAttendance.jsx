@@ -46,13 +46,12 @@ const STUDENT_SESSION_KEY = "studentSession";
 
 const ATTENDANCE_COLLECTION = "attendance";
 
-// Marker used to recognise the "already taken" case inside the transaction.
 const ALREADY_TAKEN = "ALREADY_TAKEN";
 
-// While old one-document-per-student attendance still exists, also look for
-// it when checking whether today's attendance was already taken.
-// Set to false after the old data has been migrated or is no longer needed.
 const CHECK_LEGACY_ATTENDANCE = true;
+
+// Prevent too many simultaneous Firestore calculations.
+const RECALCULATION_CONCURRENCY = 5;
 
 /* =========================================================
    Helpers
@@ -100,30 +99,10 @@ const getSubmitterName = (record) =>
   record?.submittedByName ||
   "নাম পাওয়া যায়নি";
 
-/**
- * One document per class/batch per day.
- *
- * Example: "Care_Batch 12_2026-11-03"
- *
- * The department name is included because two departments can have a
- * class with the same name (for example Academy and Coaching).
- * To use only "<class>_<date>", remove departmentName from the list below.
- *
- * Firestore IDs cannot contain "/", so it is replaced with "-".
- */
-const getAttendanceSheetId = (departmentName, className, date) =>
-  [departmentName, className, date]
-    .map((part) =>
-      String(part ?? "")
-        .trim()
-        .replaceAll("/", "-"),
-    )
-    .join("_");
-
 const getStudentGroupName = (student, department) =>
   isBatchDepartment(department)
-    ? String(student?.batchName ?? "").trim()
-    : String(student?.className ?? "").trim();
+    ? String(student?.batchName ?? student?.className ?? "").trim()
+    : String(student?.className ?? student?.batchName ?? "").trim();
 
 function readStudentSession() {
   try {
@@ -133,12 +112,23 @@ function readStudentSession() {
   }
 }
 
-/**
- * Finds attendance that already exists for this class/batch and date.
- *
- * 1. The new sheet document (a single getDoc, because the ID is known).
- * 2. Optionally, old per-student documents for the same day.
- */
+/* =========================================================
+   Attendance Sheet ID
+========================================================= */
+
+const getAttendanceSheetId = (departmentName, className, date) =>
+  [departmentName, className, date]
+    .map((part) =>
+      String(part ?? "")
+        .trim()
+        .replaceAll("/", "-"),
+    )
+    .join("_");
+
+/* =========================================================
+   Existing Attendance
+========================================================= */
+
 async function fetchExistingAttendance({
   departmentName,
   className,
@@ -148,18 +138,23 @@ async function fetchExistingAttendance({
 }) {
   const found = [];
 
-  const sheetSnapshot = await getDoc(
-    doc(
-      db,
-      ATTENDANCE_COLLECTION,
-      getAttendanceSheetId(departmentName, className, date),
-    ),
+  // Check new sheet format.
+  const sheetRef = doc(
+    db,
+    ATTENDANCE_COLLECTION,
+    getAttendanceSheetId(departmentName, className, date),
   );
 
+  const sheetSnapshot = await getDoc(sheetRef);
+
   if (sheetSnapshot.exists()) {
-    found.push({ docId: sheetSnapshot.id, ...sheetSnapshot.data() });
+    found.push({
+      docId: sheetSnapshot.id,
+      ...sheetSnapshot.data(),
+    });
   }
 
+  // Backward compatibility with old per-student records.
   if (CHECK_LEGACY_ATTENDANCE) {
     const legacySnapshot = await getDocs(
       query(collection(db, ATTENDANCE_COLLECTION), where("date", "==", date)),
@@ -168,14 +163,16 @@ async function fetchExistingAttendance({
     legacySnapshot.docs.forEach((item) => {
       const record = item.data();
 
-      // Skip sheets and anything that is not a per-student record.
       if (!record.studentDocId) return;
 
       if (
         normalizeId(record.departmentId) === departmentId &&
         String(record.classId ?? "") === classId
       ) {
-        found.push({ docId: item.id, ...record });
+        found.push({
+          docId: item.id,
+          ...record,
+        });
       }
     });
   }
@@ -184,14 +181,61 @@ async function fetchExistingAttendance({
 }
 
 /* =========================================================
+   Limited Concurrency Utility
+
+   Prevents launching hundreds of Firestore operations
+   simultaneously when a batch contains many students.
+========================================================= */
+
+async function runWithConcurrency(items, worker, concurrency = 5) {
+  const results = new Array(items.length);
+
+  let nextIndex = 0;
+
+  async function runWorker() {
+    while (true) {
+      const currentIndex = nextIndex++;
+
+      if (currentIndex >= items.length) return;
+
+      try {
+        results[currentIndex] = {
+          status: "fulfilled",
+          value: await worker(items[currentIndex]),
+        };
+      } catch (error) {
+        results[currentIndex] = {
+          status: "rejected",
+          reason: error,
+        };
+      }
+    }
+  }
+
+  const workerCount = Math.min(Math.max(1, concurrency), items.length);
+
+  await Promise.all(Array.from({ length: workerCount }, () => runWorker()));
+
+  return results;
+}
+
+/* =========================================================
    Component
 ========================================================= */
 
 export default function AddAttendance() {
+  /* -------------------------------------------------------
+     Loading States
+  ------------------------------------------------------- */
+
   const [loading, setLoading] = useState(true);
   const [loadingStudents, setLoadingStudents] = useState(false);
   const [checkingAttendance, setCheckingAttendance] = useState(false);
   const [submitting, setSubmitting] = useState(false);
+
+  /* -------------------------------------------------------
+     Authentication
+  ------------------------------------------------------- */
 
   const [currentUser, setCurrentUser] = useState(null);
   const [profile, setProfile] = useState(null);
@@ -202,18 +246,32 @@ export default function AddAttendance() {
 
   const [authError, setAuthError] = useState("");
 
+  /* -------------------------------------------------------
+     Selection
+  ------------------------------------------------------- */
+
   const [selectedDepartmentId, setSelectedDepartmentId] = useState("");
 
   const [selectedClassId, setSelectedClassId] = useState("");
 
   const [date, setDate] = useState(getLocalDate());
+
   const [search, setSearch] = useState("");
+
+  /* -------------------------------------------------------
+     Students and Attendance
+  ------------------------------------------------------- */
 
   const [students, setStudents] = useState([]);
   const [attendance, setAttendance] = useState({});
 
   const [existingAttendance, setExistingAttendance] = useState([]);
+
   const [attendanceCheckError, setAttendanceCheckError] = useState("");
+
+  /* -------------------------------------------------------
+     Roles
+  ------------------------------------------------------- */
 
   const isAdminUser = role === "admin";
   const isCR = role === "cr";
@@ -222,9 +280,9 @@ export default function AddAttendance() {
 
   const canManageAttendance = isAdminUser || isCR || isTeacher || isHead;
 
-  /* =========================================================
+  /* =======================================================
      Allowed Departments
-  ========================================================= */
+  ======================================================= */
 
   const allowedDepartments = useMemo(() => {
     if (isAdminUser) {
@@ -254,18 +312,15 @@ export default function AddAttendance() {
   );
 
   const availableClasses = useMemo(() => {
-    if (!selectedDepartment) {
-      return [];
-    }
+    if (!selectedDepartment) return [];
 
     const classes = selectedDepartment.classes ?? [];
 
-    if (!isCR || !crStudent) {
-      return classes;
-    }
+    if (!isCR || !crStudent) return classes;
 
-    // CR can only access their own Care batch.
-    return classes.filter((item) => item.id === crStudent.batchId);
+    return classes.filter(
+      (item) => String(item.id) === String(crStudent.batchId),
+    );
   }, [selectedDepartment, isCR, crStudent]);
 
   const selectedClass = useMemo(
@@ -276,15 +331,9 @@ export default function AddAttendance() {
     [availableClasses, selectedClassId],
   );
 
-  /* =========================================================
+  /* =======================================================
      Authentication
-
-     IMPORTANT:
-     Student CR login is stored in localStorage.
-     It does not require Firebase Auth.
-
-     Teacher/Admin login uses Firebase Auth.
-  ========================================================= */
+  ======================================================= */
 
   useEffect(() => {
     let cancelled = false;
@@ -294,6 +343,7 @@ export default function AddAttendance() {
 
       setLoading(true);
       setAuthError("");
+
       setCurrentUser(user);
       setProfile(null);
       setRole("");
@@ -309,11 +359,10 @@ export default function AddAttendance() {
       setAttendanceCheckError("");
 
       try {
-        /* -----------------------------------------------
-             1. Check Student Session FIRST
-
-             Student login does not use Firebase Auth.
-          ----------------------------------------------- */
+        /*
+         * 1. Check CR student session first.
+         * CR login does not require Firebase Auth.
+         */
 
         const session = readStudentSession();
 
@@ -344,7 +393,7 @@ export default function AddAttendance() {
           );
 
           const ownBatch = department?.classes?.find(
-            (item) => item.id === student.batchId,
+            (item) => String(item.id) === String(student.batchId),
           );
 
           if (
@@ -353,16 +402,6 @@ export default function AddAttendance() {
             !department ||
             !ownBatch
           ) {
-            console.warn("CR verification failed:", {
-              isCR: student.isCR,
-              approved: student.approved,
-              isActive: student.isActive,
-              departmentId: student.departmentId,
-              batchId: student.batchId,
-              departmentFound: Boolean(department),
-              batchFound: Boolean(ownBatch),
-            });
-
             setAuthError(
               "শুধু সক্রিয় ও অনুমোদিত CR নিজের কেয়ার ব্যাচের উপস্থিতি নিতে পারবেন।",
             );
@@ -383,9 +422,9 @@ export default function AddAttendance() {
           return;
         }
 
-        /* -----------------------------------------------
-             2. Firebase Auth required for staff
-          ----------------------------------------------- */
+        /*
+         * 2. Firebase Auth required for staff.
+         */
 
         if (!user) {
           setAuthError("উপস্থিতি পরিচালনার জন্য লগইন করুন।");
@@ -393,9 +432,9 @@ export default function AddAttendance() {
           return;
         }
 
-        /* -----------------------------------------------
-             3. Admin
-          ----------------------------------------------- */
+        /*
+         * 3. Admin
+         */
 
         if (isAdmin(user.email) || getUserRole(user) === "admin") {
           setProfile({
@@ -411,9 +450,9 @@ export default function AddAttendance() {
           return;
         }
 
-        /* -----------------------------------------------
-             4. Teacher / Department Head
-          ----------------------------------------------- */
+        /*
+         * 4. Teacher / Department Head
+         */
 
         const teacherSnapshot = await getDocs(
           query(
@@ -514,9 +553,9 @@ export default function AddAttendance() {
     };
   }, []);
 
-  /* =========================================================
+  /* =======================================================
      Initial Department / Batch
-  ========================================================= */
+  ======================================================= */
 
   useEffect(() => {
     if (!allowedDepartments.length) {
@@ -538,7 +577,7 @@ export default function AddAttendance() {
 
     if (isCR && crStudent) {
       const ownBatch = department.classes?.find(
-        (item) => item.id === crStudent.batchId,
+        (item) => String(item.id) === String(crStudent.batchId),
       );
 
       setSelectedClassId(ownBatch ? getClassId(ownBatch) : "");
@@ -562,9 +601,9 @@ export default function AddAttendance() {
     }
   }, [availableClasses, selectedClassId]);
 
-  /* =========================================================
+  /* =======================================================
      Load Students
-  ========================================================= */
+  ======================================================= */
 
   const loadStudents = useCallback(async () => {
     if (!selectedDepartment || !selectedClass) {
@@ -625,9 +664,9 @@ export default function AddAttendance() {
     loadStudents();
   }, [loadStudents]);
 
-  /* =========================================================
+  /* =======================================================
      Check Existing Attendance
-  ========================================================= */
+  ======================================================= */
 
   const checkExistingAttendance = useCallback(async () => {
     if (!selectedDepartment || !selectedClass || !date) {
@@ -666,9 +705,9 @@ export default function AddAttendance() {
     checkExistingAttendance();
   }, [checkExistingAttendance]);
 
-  /* =========================================================
+  /* =======================================================
      Search / Statistics
-  ========================================================= */
+  ======================================================= */
 
   const filteredStudents = useMemo(() => {
     const term = search.trim().toLowerCase();
@@ -686,15 +725,16 @@ export default function AddAttendance() {
     );
   }, [students, search]);
 
-  const presentCount = students.filter(
-    (student) => attendance[student.docId] === true,
-  ).length;
+  const presentCount = useMemo(
+    () =>
+      students.filter((student) => attendance[student.docId] === true).length,
+    [students, attendance],
+  );
 
   const absentCount = students.length - presentCount;
 
   const alreadyTaken = existingAttendance.length > 0;
 
-  // A sheet counts as many students; an old per-student record counts as one.
   const existingCount = existingAttendance.reduce(
     (sum, item) => sum + (Number(item.totalStudents) || 1),
     0,
@@ -708,12 +748,12 @@ export default function AddAttendance() {
     return record ? getSubmitterName(record) : "";
   }, [existingAttendance]);
 
-  /* =========================================================
+  /* =======================================================
      Selection Handlers
-  ========================================================= */
+  ======================================================= */
 
   const handleDepartmentChange = (value) => {
-    if (isCR) return;
+    if (isCR || submitting) return;
 
     setSelectedDepartmentId(value);
     setSelectedClassId("");
@@ -726,7 +766,7 @@ export default function AddAttendance() {
   };
 
   const handleClassChange = (value) => {
-    if (isCR) return;
+    if (isCR || submitting) return;
 
     setSelectedClassId(value);
 
@@ -738,7 +778,14 @@ export default function AddAttendance() {
   };
 
   const markAll = (present) => {
-    if (alreadyTaken || checkingAttendance) return;
+    if (
+      alreadyTaken ||
+      checkingAttendance ||
+      attendanceCheckError ||
+      submitting
+    ) {
+      return;
+    }
 
     setAttendance(
       Object.fromEntries(students.map((student) => [student.docId, present])),
@@ -746,7 +793,12 @@ export default function AddAttendance() {
   };
 
   const toggleStudent = (studentDocId) => {
-    if (alreadyTaken || checkingAttendance || attendanceCheckError) {
+    if (
+      alreadyTaken ||
+      checkingAttendance ||
+      attendanceCheckError ||
+      submitting
+    ) {
       return;
     }
 
@@ -756,11 +808,13 @@ export default function AddAttendance() {
     }));
   };
 
-  /* =========================================================
+  /* =======================================================
      Save Attendance + Recalculate Current Mark
-  ========================================================= */
+  ======================================================= */
 
   const handleSubmit = async () => {
+    if (submitting) return;
+
     if (!canManageAttendance) {
       toast.error("আপনার উপস্থিতি নেওয়ার অনুমতি নেই।");
       return;
@@ -802,7 +856,6 @@ export default function AddAttendance() {
     const className = selectedClass.name;
 
     const departmentId = getDepartmentId(selectedDepartment);
-
     const classId = getClassId(selectedClass);
 
     if (!isAdminUser && !userDepartments.includes(departmentId)) {
@@ -810,9 +863,9 @@ export default function AddAttendance() {
       return;
     }
 
-    /* -----------------------------------------------
+    /* -----------------------------------------------------
        Re-verify CR's own batch
-    ----------------------------------------------- */
+    ----------------------------------------------------- */
 
     if (isCR) {
       const session = readStudentSession();
@@ -824,7 +877,7 @@ export default function AddAttendance() {
         crStudent.isCR !== true ||
         !isActiveStudent(crStudent) ||
         normalizeId(crStudent.departmentId) !== departmentId ||
-        crStudent.batchId !== classId ||
+        String(crStudent.batchId) !== classId ||
         selectedDepartment.type !== "batch"
       ) {
         toast.error(
@@ -838,9 +891,9 @@ export default function AddAttendance() {
     setSubmitting(true);
 
     try {
-      /* -----------------------------------------------
-         Recheck existing attendance (fresh from the server)
-      ----------------------------------------------- */
+      /* ---------------------------------------------------
+         Recheck existing attendance from server
+      --------------------------------------------------- */
 
       const existingNow = await fetchExistingAttendance({
         departmentName,
@@ -858,9 +911,9 @@ export default function AddAttendance() {
         return;
       }
 
-      /* -----------------------------------------------
-         Submitter details
-      ----------------------------------------------- */
+      /* ---------------------------------------------------
+         Submitter Details
+      --------------------------------------------------- */
 
       const submitterName =
         profile?.name ||
@@ -874,9 +927,9 @@ export default function AddAttendance() {
 
       const submitterRole = isCR ? "student" : role;
 
-      /* -----------------------------------------------
-         Build ONE document for the whole class/batch
-      ----------------------------------------------- */
+      /* ---------------------------------------------------
+         Build Attendance Records
+      --------------------------------------------------- */
 
       const records = {};
 
@@ -897,13 +950,9 @@ export default function AddAttendance() {
         getAttendanceSheetId(departmentName, className, date),
       );
 
-      /* -----------------------------------------------
-         Save attendance
-
-         A transaction makes the "create only if it does
-         not exist" check and the write one atomic step,
-         so two people cannot both save the same day.
-      ----------------------------------------------- */
+      /* ---------------------------------------------------
+         Save Attendance Atomically
+      --------------------------------------------------- */
 
       await runTransaction(db, async (transaction) => {
         const snapshot = await transaction.get(sheetRef);
@@ -930,8 +979,6 @@ export default function AddAttendance() {
               }
             : {}),
 
-          // Lets any student's attendance be found with one query:
-          // where("studentDocIds", "array-contains", studentDocId)
           studentDocIds: students.map((student) => student.docId),
 
           records,
@@ -955,24 +1002,23 @@ export default function AddAttendance() {
 
       toast.success("উপস্থিতি সফলভাবে সংরক্ষণ করা হয়েছে।");
 
-      /* -----------------------------------------------
-         Recalculate currentMark
+      /* ---------------------------------------------------
+         Recalculate Current Mark
 
-         Attendance is already saved. If recalculation
-         fails, do not treat attendance as unsaved.
-      ----------------------------------------------- */
+         Attendance has already been saved.
+         Recalculation errors must not undo attendance.
+      --------------------------------------------------- */
 
-      const results = await Promise.allSettled(
-        students.map((student) =>
+      const recalculationResults = await runWithConcurrency(
+        students,
+        (student) =>
           calculateCurrentMark({
-            db,
             studentDocumentId: student.docId,
-            studentId: String(student.studentId ?? ""),
           }),
-        ),
+        RECALCULATION_CONCURRENCY,
       );
 
-      const failedResults = results.filter(
+      const failedResults = recalculationResults.filter(
         (result) => result.status === "rejected",
       );
 
@@ -986,6 +1032,7 @@ export default function AddAttendance() {
         toast.success("সব শিক্ষার্থীর currentMark আপডেট হয়েছে।");
       }
 
+      // Refresh attendance status.
       await checkExistingAttendance();
     } catch (error) {
       if (error?.message === ALREADY_TAKEN) {
@@ -1006,9 +1053,9 @@ export default function AddAttendance() {
     }
   };
 
-  /* =========================================================
+  /* =======================================================
      Loading
-  ========================================================= */
+  ======================================================= */
 
   if (loading) {
     return (
@@ -1024,9 +1071,9 @@ export default function AddAttendance() {
     );
   }
 
-  /* =========================================================
+  /* =======================================================
      Access Denied
-  ========================================================= */
+  ======================================================= */
 
   if (authError || !canManageAttendance) {
     return (
@@ -1044,13 +1091,14 @@ export default function AddAttendance() {
     );
   }
 
-  /* =========================================================
+  /* =======================================================
      UI
-  ========================================================= */
+  ======================================================= */
 
   return (
     <main className="mx-auto w-full max-w-5xl px-3 py-4 sm:px-5 sm:py-6">
       {/* Header */}
+
       <section className="mb-5 rounded-2xl bg-gradient-to-br from-primary to-primary/80 p-4 text-primary-content shadow-md sm:p-6">
         <div className="flex items-start justify-between gap-3">
           <div>
@@ -1089,6 +1137,7 @@ export default function AddAttendance() {
       </section>
 
       {/* Attendance Information */}
+
       <section className="mb-4 rounded-2xl border border-base-300 bg-base-100 p-4 shadow-sm sm:p-5">
         <h2 className="mb-4 flex items-center gap-2 font-bold">
           <FiCalendar className="text-primary" />
@@ -1161,6 +1210,7 @@ export default function AddAttendance() {
       </section>
 
       {/* Attendance Status */}
+
       {checkingAttendance && (
         <div className="alert mb-4 border border-info/20 bg-info/10 text-sm">
           <span className="loading loading-spinner loading-sm" />
@@ -1204,6 +1254,7 @@ export default function AddAttendance() {
       )}
 
       {/* Statistics */}
+
       <section className="mb-4 grid grid-cols-3 gap-2 sm:gap-3">
         {[
           ["মোট শিক্ষার্থী", students.length, "text-base-content"],
@@ -1224,6 +1275,7 @@ export default function AddAttendance() {
       </section>
 
       {/* Student List */}
+
       <section className="overflow-hidden rounded-2xl border border-base-300 bg-base-100 shadow-sm">
         <div className="border-b border-base-300 p-4 sm:p-5">
           <div className="flex flex-wrap items-center justify-between gap-3">
@@ -1297,6 +1349,8 @@ export default function AddAttendance() {
             </button>
           </div>
         </div>
+
+        {/* Student Data */}
 
         {loadingStudents ? (
           <div className="grid min-h-48 place-items-center">
@@ -1376,6 +1430,7 @@ export default function AddAttendance() {
         )}
 
         {/* Save Attendance */}
+
         <div className="sticky bottom-0 z-10 border-t border-base-300 bg-base-100/95 p-4 backdrop-blur sm:p-5">
           <div className="mb-3 flex items-center justify-between gap-3 text-sm">
             <span className="text-base-content/65">

@@ -192,29 +192,10 @@ const ExamCard = ({
               </button>
             )}
 
-            {!retakeUsed && isRunning && (
-              <button
-                type="button"
-                className="btn btn-warning w-full"
-                onClick={handleRetake}
-                disabled={busy}
-              >
-                {busy
-                  ? "অপেক্ষা করুন..."
-                  : `আবার পরীক্ষা দিন — ${RETAKE_COST} পয়েন্ট`}
-              </button>
-            )}
-
             {retakeUsed && (
               <div className="rounded-xl bg-base-200 p-3 text-center text-sm text-base-content/60">
                 এই পরীক্ষায় Retake ইতোমধ্যে ব্যবহার করা হয়েছে।
               </div>
-            )}
-
-            {!retakeUsed && isRunning && Number(studentPoint) < RETAKE_COST && (
-              <p className="text-center text-xs text-error">
-                Retake করতে ১০ পয়েন্ট লাগবে। তোমার পয়েন্ট: {studentPoint}
-              </p>
             )}
           </div>
         ) : hasAttempt ? (

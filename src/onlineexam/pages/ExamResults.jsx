@@ -1,15 +1,31 @@
-import { useEffect, useMemo, useState } from "react";
-import { collection, getDocs, query, where } from "firebase/firestore";
+import { useCallback, useEffect, useMemo, useState } from "react";
+import { getAuth, onAuthStateChanged } from "firebase/auth";
+
+import {
+  collection,
+  deleteDoc,
+  doc,
+  getDocs,
+  query,
+  updateDoc,
+  where,
+} from "firebase/firestore";
+
 import toast from "react-hot-toast";
+import Swal from "sweetalert2";
+import { FaPlus, FaTrash } from "react-icons/fa";
 
 import { db } from "../../assets/firebase/firebase.init";
 import { departmentList } from "../../config/departments";
+import { isAdmin as hasAdminPermission } from "../../config/permissions";
+import { calculateCurrentMark } from "../../utils/calculateCurrentMark";
 
-/* =========================================================
+/* =========================
    Helpers
-========================================================= */
+========================= */
 
 const normalize = (value) => String(value ?? "").trim();
+
 const sameId = (a, b) => normalize(a) === normalize(b);
 
 const getStudentClass = (student) =>
@@ -37,9 +53,12 @@ const getExamTitle = (exam) =>
 const firstNumber = (...values) => {
   for (const value of values) {
     if (value === undefined || value === null || value === "") continue;
+
     const number = Number(value);
+
     if (Number.isFinite(number)) return number;
   }
+
   return null;
 };
 
@@ -78,11 +97,13 @@ const formatPercent = (percent) =>
 
 const csvCell = (value) => `"${String(value ?? "").replace(/"/g, '""')}"`;
 
-/* =========================================================
+/* =========================
    Component
-========================================================= */
+========================= */
 
 export default function ExamResults() {
+  const [isAdmin, setIsAdmin] = useState(false);
+
   const [students, setStudents] = useState([]);
   const [exams, setExams] = useState([]);
   const [results, setResults] = useState([]);
@@ -98,46 +119,115 @@ export default function ExamResults() {
   const [examsLoading, setExamsLoading] = useState(false);
   const [resultLoading, setResultLoading] = useState(false);
 
-  /* ---------- Load all students once ---------- */
+  const [updatingResultId, setUpdatingResultId] = useState("");
+  const [deletingResultId, setDeletingResultId] = useState("");
+
+  /* =========================
+     Admin permission
+  ========================= */
+
+  useEffect(() => {
+    const auth = getAuth();
+
+    const unsubscribe = onAuthStateChanged(auth, (user) => {
+      setIsAdmin(hasAdminPermission(user?.email));
+    });
+
+    return unsubscribe;
+  }, []);
+
+  /* =========================
+     Recalculate currentMark
+  ========================= */
+
+  const recalculateStudentMark = useCallback(async (studentDocumentId) => {
+    const id = normalize(studentDocumentId);
+
+    if (!id) {
+      console.warn(
+        "Cannot recalculate currentMark: studentDocumentId is missing.",
+      );
+
+      return false;
+    }
+
+    try {
+      await calculateCurrentMark({
+        studentDocumentId: id,
+      });
+
+      return true;
+    } catch (error) {
+      console.error("Recalculate currentMark error:", error);
+
+      return false;
+    }
+  }, []);
+
+  /* =========================
+     Load students
+  ========================= */
+
   useEffect(() => {
     let mounted = true;
 
     async function loadStudents() {
       try {
         const snapshot = await getDocs(collection(db, "students"));
+
         const list = snapshot.docs.map((item) => ({
           ...item.data(),
           documentId: item.id,
         }));
-        if (mounted) setStudents(list);
+
+        if (mounted) {
+          setStudents(list);
+        }
       } catch (error) {
         console.error("Load students error:", error);
         toast.error("শিক্ষার্থীদের তথ্য লোড করা যায়নি।");
       } finally {
-        if (mounted) setLoading(false);
+        if (mounted) {
+          setLoading(false);
+        }
       }
     }
 
     loadStudents();
+
     return () => {
       mounted = false;
     };
   }, []);
 
-  /* ---------- Class/batch options for the chosen department ---------- */
+  /* =========================
+     Class / Batch options
+  ========================= */
+
   const classOptions = useMemo(() => {
     const map = new Map();
+
     students.forEach((student) => {
-      if (departmentId && !sameId(student.departmentId, departmentId)) return;
+      if (departmentId && !sameId(student.departmentId, departmentId)) {
+        return;
+      }
+
       const id = getStudentClass(student);
-      if (id && !map.has(id)) map.set(id, getStudentClassName(student));
+
+      if (id && !map.has(id)) {
+        map.set(id, getStudentClassName(student));
+      }
     });
+
     return [...map.entries()]
       .map(([id, name]) => ({ id, name }))
       .sort((a, b) => a.name.localeCompare(b.name));
   }, [students, departmentId]);
 
-  /* ---------- Load exam list for the chosen filters ---------- */
+  /* =========================
+     Load exams
+  ========================= */
+
   useEffect(() => {
     let mounted = true;
 
@@ -152,19 +242,29 @@ export default function ExamResults() {
 
       try {
         const isOnline = examType === "online";
+
         const snapshot = await getDocs(
           collection(db, isOnline ? "onlineExams" : "syllabuses"),
         );
 
         const list = snapshot.docs
-          .map((item) => ({ id: item.id, ...item.data() }))
+          .map((item) => ({
+            id: item.id,
+            ...item.data(),
+          }))
           .filter((exam) => {
-            if (!sameId(exam.departmentId, departmentId)) return false;
+            if (!sameId(exam.departmentId, departmentId)) {
+              return false;
+            }
+
             if (!classId) return true;
 
-            if (!isOnline) return sameId(exam.classId, classId);
+            if (!isOnline) {
+              return sameId(exam.classId, classId);
+            }
 
             const selected = getExamClasses(exam);
+
             return selected.length === 0 || selected.includes(classId);
           })
           .sort((a, b) =>
@@ -173,27 +273,36 @@ export default function ExamResults() {
             ),
           );
 
-        if (mounted) setExams(list);
+        if (mounted) {
+          setExams(list);
+        }
       } catch (error) {
         console.error("Load exam list error:", error);
         toast.error("পরীক্ষার তালিকা লোড করা যায়নি।");
       } finally {
-        if (mounted) setExamsLoading(false);
+        if (mounted) {
+          setExamsLoading(false);
+        }
       }
     }
 
     loadExams();
+
     return () => {
       mounted = false;
     };
   }, [examType, departmentId, classId]);
 
-  /* ---------- Load results of the selected exam ---------- */
+  /* =========================
+     Load results
+  ========================= */
+
   useEffect(() => {
     let mounted = true;
 
     async function loadResults() {
       setResults([]);
+
       if (!examId || !examType) return;
 
       setResultLoading(true);
@@ -211,24 +320,167 @@ export default function ExamResults() {
           ...item.data(),
         }));
 
-        if (mounted) setResults(list);
+        if (mounted) {
+          setResults(list);
+        }
       } catch (error) {
         console.error("Load exam results error:", error);
         toast.error("ফলাফল লোড করা যায়নি।");
       } finally {
-        if (mounted) setResultLoading(false);
+        if (mounted) {
+          setResultLoading(false);
+        }
       }
     }
 
     loadResults();
+
     return () => {
       mounted = false;
     };
   }, [examId, examType]);
 
+  /* =========================
+     Increase mark
+  ========================= */
+
+  async function handleIncreaseMark(row) {
+    if (!isAdmin || !row?.id || !examType) return;
+
+    const originalResult = results.find((item) => item.id === row.id);
+
+    if (!originalResult) {
+      toast.error("ফলাফলের তথ্য পাওয়া যায়নি।");
+      return;
+    }
+
+    const scoreFields = [
+      "obtainedMark",
+      "score",
+      "totalObtainedMark",
+      "marksObtained",
+      "marks",
+      "correctCount",
+      "correctAnswers",
+    ];
+
+    const fieldToUpdate =
+      scoreFields.find(
+        (field) =>
+          originalResult[field] !== undefined &&
+          originalResult[field] !== null &&
+          originalResult[field] !== "",
+      ) || "obtainedMark";
+
+    const currentScore = Number(originalResult[fieldToUpdate] ?? 0);
+
+    if (!Number.isFinite(currentScore)) {
+      toast.error("বর্তমান নম্বর সঠিক নয়।");
+      return;
+    }
+
+    const collectionName = examType === "online" ? "examResults" : "examMarks";
+
+    setUpdatingResultId(row.id);
+
+    try {
+      // 1. Update the result document.
+      await updateDoc(doc(db, collectionName, row.id), {
+        [fieldToUpdate]: currentScore + 1,
+      });
+
+      // 2. Update local result state.
+      setResults((previous) =>
+        previous.map((item) =>
+          item.id === row.id
+            ? {
+                ...item,
+                [fieldToUpdate]: currentScore + 1,
+              }
+            : item,
+        ),
+      );
+
+      // 3. Recalculate student's combined currentMark.
+      const recalculated = await recalculateStudentMark(row.studentDocumentId);
+
+      if (recalculated) {
+        toast.success(
+          `${row.name}-এর নম্বর ১ বাড়ানো হয়েছে এবং Current Mark আপডেট হয়েছে।`,
+        );
+      } else {
+        toast.success(`${row.name}-এর নম্বর ১ বাড়ানো হয়েছে।`);
+
+        toast.error(
+          "Current Mark আপডেট করা যায়নি। শিক্ষার্থীর রেকর্ড যাচাই করুন।",
+        );
+      }
+    } catch (error) {
+      console.error("Increase result mark error:", error);
+      toast.error("নম্বর বাড়ানো যায়নি।");
+    } finally {
+      setUpdatingResultId("");
+    }
+  }
+
+  /* =========================
+     Delete result
+  ========================= */
+
+  async function handleDeleteResult(row) {
+    if (!isAdmin || !row?.id || !examType) return;
+
+    const confirmation = await Swal.fire({
+      title: "ফলাফল মুছে ফেলবেন?",
+      text: `${row.name}-এর ${formatNumber(row.score)} নম্বরের ফলাফল স্থায়ীভাবে মুছে যাবে।`,
+      icon: "warning",
+      showCancelButton: true,
+      confirmButtonText: "হ্যাঁ, মুছে ফেলুন",
+      cancelButtonText: "বাতিল",
+      confirmButtonColor: "#dc2626",
+      cancelButtonColor: "#64748b",
+      reverseButtons: true,
+    });
+
+    if (!confirmation.isConfirmed) return;
+
+    const collectionName = examType === "online" ? "examResults" : "examMarks";
+
+    setDeletingResultId(row.id);
+
+    try {
+      // 1. Delete the selected result document.
+      await deleteDoc(doc(db, collectionName, row.id));
+
+      // 2. Update local state.
+      setResults((previous) => previous.filter((item) => item.id !== row.id));
+
+      // 3. Recalculate currentMark after deletion.
+      const recalculated = await recalculateStudentMark(row.studentDocumentId);
+
+      if (recalculated) {
+        toast.success("ফলাফল মুছে ফেলা হয়েছে এবং Current Mark আপডেট হয়েছে।");
+      } else {
+        toast.success("ফলাফল মুছে ফেলা হয়েছে।");
+
+        toast.error(
+          "Current Mark আপডেট করা যায়নি। শিক্ষার্থীর রেকর্ড যাচাই করুন।",
+        );
+      }
+    } catch (error) {
+      console.error("Delete exam result error:", error);
+      toast.error("ফলাফল মুছে ফেলা যায়নি।");
+    } finally {
+      setDeletingResultId("");
+    }
+  }
+
   const selectedExam = exams.find((exam) => exam.id === examId);
 
-  /* ---------- Roster: students who should have taken this exam ---------- */
+  /* =========================
+     Student roster
+  ========================= */
+
   const roster = useMemo(() => {
     if (!selectedExam) return [];
 
@@ -238,25 +490,39 @@ export default function ExamResults() {
         : [normalize(selectedExam.classId)].filter(Boolean);
 
     return students.filter((student) => {
-      if (!sameId(student.departmentId, departmentId)) return false;
+      if (!sameId(student.departmentId, departmentId)) {
+        return false;
+      }
 
       const studentClass = getStudentClass(student);
-      if (classId) return studentClass === classId;
+
+      if (classId) {
+        return studentClass === classId;
+      }
+
       return examClassIds.length === 0 || examClassIds.includes(studentClass);
     });
   }, [students, selectedExam, examType, departmentId, classId]);
 
-  /* ---------- Join results with students, rank, and find absentees ---------- */
+  /* =========================
+     Join results with students
+  ========================= */
+
   const { rows, absent } = useMemo(() => {
     const byDocumentId = new Map();
     const byStudentId = new Map();
+
     students.forEach((student) => {
       byDocumentId.set(normalize(student.documentId), student);
-      if (student.studentId)
+
+      if (student.studentId) {
         byStudentId.set(normalize(student.studentId), student);
+      }
     });
 
-    const rosterIds = new Set(roster.map((s) => normalize(s.documentId)));
+    const rosterIds = new Set(
+      roster.map((student) => normalize(student.documentId)),
+    );
 
     const findStudent = (result) =>
       byDocumentId.get(normalize(result.studentDocumentId)) ||
@@ -264,36 +530,49 @@ export default function ExamResults() {
       byStudentId.get(normalize(result.studentUid));
 
     const joined = results
-      .map((result) => {
-        const student = findStudent(result);
-        return { result, student };
-      })
+      .map((result) => ({
+        result,
+        student: findStudent(result),
+      }))
       .filter(({ result, student }) => {
-        if (student) return rosterIds.has(normalize(student.documentId));
+        if (student) {
+          return rosterIds.has(normalize(student.documentId));
+        }
 
-        // Result with no matching student profile: fall back to its own fields.
         if (
           result.departmentId != null &&
           !sameId(result.departmentId, departmentId)
         ) {
           return false;
         }
+
         const resultClass = normalize(result.batchId || result.classId);
+
         return !classId || !resultClass || resultClass === classId;
       })
       .map(({ result, student }) => {
         const score = getScore(result);
         const total = getTotal(result);
+
         return {
           id: result.id,
-          documentId: student?.documentId ?? "",
+
+          // Keep the real Firestore student document ID.
+          // It is required by calculateCurrentMark().
+          studentDocumentId:
+            normalize(result.studentDocumentId) ||
+            normalize(student?.documentId),
+
           name:
             result.studentName ||
             student?.name ||
             result.name ||
             "নাম পাওয়া যায়নি",
+
           studentId: result.studentId || student?.studentId || "",
+
           className: student ? getStudentClassName(student) : "—",
+
           score,
           total,
           percent: getPercent(score, total),
@@ -301,14 +580,18 @@ export default function ExamResults() {
       })
       .sort((a, b) => b.score - a.score);
 
-    // Tied scores share the same rank.
-    const ranked = joined.map((row, index) => {
+    // Students with equal scores share the same rank.
+    const ranked = joined.map((row) => {
       const firstSame = joined.findIndex((item) => item.score === row.score);
-      return { ...row, rank: firstSame + 1 };
+
+      return {
+        ...row,
+        rank: firstSame + 1,
+      };
     });
 
     const submittedIds = new Set(
-      ranked.map((row) => normalize(row.documentId)),
+      ranked.map((row) => normalize(row.studentDocumentId)).filter(Boolean),
     );
 
     const absentList = roster
@@ -326,24 +609,38 @@ export default function ExamResults() {
       }))
       .sort((a, b) => a.name.localeCompare(b.name));
 
-    return { rows: ranked, absent: absentList };
+    return {
+      rows: ranked,
+      absent: absentList,
+    };
   }, [results, students, roster, departmentId, classId]);
 
-  /* ---------- Search ---------- */
+  /* =========================
+     Search
+  ========================= */
+
   const term = search.trim().toLowerCase();
+
   const matches = (item) =>
     !term ||
     item.name.toLowerCase().includes(term) ||
     normalize(item.studentId).toLowerCase().includes(term);
 
   const visibleRows = rows.filter(matches);
+
   const visibleAbsent = showAbsent ? absent.filter(matches) : [];
 
-  /* ---------- Summary ---------- */
+  /* =========================
+     Summary
+  ========================= */
+
   const stats = useMemo(() => {
     if (!rows.length) return null;
+
     const scores = rows.map((row) => row.score);
+
     const sum = scores.reduce((acc, value) => acc + value, 0);
+
     return {
       average: sum / rows.length,
       highest: Math.max(...scores),
@@ -352,7 +649,10 @@ export default function ExamResults() {
     };
   }, [rows]);
 
-  /* ---------- CSV export ---------- */
+  /* =========================
+     CSV export
+  ========================= */
+
   function exportCsv() {
     if (!rows.length && !absent.length) return;
 
@@ -365,8 +665,10 @@ export default function ExamResults() {
       "পূর্ণমান",
       "শতকরা",
     ];
+
     const lines = [
       header.map(csvCell).join(","),
+
       ...rows.map((row) =>
         [
           row.rank,
@@ -380,6 +682,7 @@ export default function ExamResults() {
           .map(csvCell)
           .join(","),
       ),
+
       ...absent.map((item) =>
         ["অনুপস্থিত", item.name, item.studentId, item.className, "", "", ""]
           .map(csvCell)
@@ -387,19 +690,24 @@ export default function ExamResults() {
       ),
     ];
 
-    // BOM keeps Bengali text readable when opened in Excel.
     const blob = new Blob(["\uFEFF" + lines.join("\n")], {
       type: "text/csv;charset=utf-8;",
     });
+
     const url = URL.createObjectURL(blob);
     const link = document.createElement("a");
+
     link.href = url;
     link.download = `${getExamTitle(selectedExam)}-results.csv`;
     link.click();
+
     URL.revokeObjectURL(url);
   }
 
-  /* ---------- Render ---------- */
+  /* =========================
+     Loading
+  ========================= */
+
   if (loading) {
     return (
       <div className="flex min-h-64 items-center justify-center">
@@ -408,10 +716,15 @@ export default function ExamResults() {
     );
   }
 
+  /* =========================
+     Render
+  ========================= */
+
   return (
     <main className="mx-auto max-w-6xl space-y-6 px-4 py-6 sm:px-6 lg:px-8">
       <section>
         <h1 className="text-2xl font-extrabold sm:text-3xl">পরীক্ষার ফলাফল</h1>
+
         <p className="mt-2 text-sm text-base-content/60">
           বিভাগ, ব্যাচ ও পরীক্ষা নির্বাচন করে সবার ফলাফল দেখো।
         </p>
@@ -421,6 +734,7 @@ export default function ExamResults() {
       <section className="grid gap-4 rounded-2xl border border-base-300 bg-base-100 p-4 shadow-sm sm:grid-cols-2 sm:p-5 lg:grid-cols-4">
         <label className="form-control w-full">
           <span className="label-text mb-2 font-semibold">বিভাগ</span>
+
           <select
             className="select select-bordered w-full"
             value={departmentId}
@@ -430,6 +744,7 @@ export default function ExamResults() {
             }}
           >
             <option value="">নির্বাচন করুন</option>
+
             {departmentList.map((item) => (
               <option key={item.id} value={item.id}>
                 {item.name}
@@ -440,6 +755,7 @@ export default function ExamResults() {
 
         <label className="form-control w-full">
           <span className="label-text mb-2 font-semibold">ব্যাচ / শ্রেণি</span>
+
           <select
             className="select select-bordered w-full"
             value={classId}
@@ -447,6 +763,7 @@ export default function ExamResults() {
             onChange={(event) => setClassId(event.target.value)}
           >
             <option value="">সব ব্যাচ</option>
+
             {classOptions.map((item) => (
               <option key={item.id} value={item.id}>
                 {item.name}
@@ -457,6 +774,7 @@ export default function ExamResults() {
 
         <label className="form-control w-full">
           <span className="label-text mb-2 font-semibold">পরীক্ষার ধরন</span>
+
           <select
             className="select select-bordered w-full"
             value={examType}
@@ -470,6 +788,7 @@ export default function ExamResults() {
 
         <label className="form-control w-full">
           <span className="label-text mb-2 font-semibold">পরীক্ষা</span>
+
           <select
             className="select select-bordered w-full"
             value={examId}
@@ -485,6 +804,7 @@ export default function ExamResults() {
                     ? "পরীক্ষা নির্বাচন করুন"
                     : "কোনো পরীক্ষা পাওয়া যায়নি"}
             </option>
+
             {exams.map((exam) => (
               <option key={exam.id} value={exam.id}>
                 {getExamTitle(exam)}
@@ -498,6 +818,7 @@ export default function ExamResults() {
       {!selectedExam && (
         <div className="rounded-2xl border border-dashed border-base-300 bg-base-100 px-5 py-12 text-center">
           <h2 className="font-bold">ফলাফল দেখতে পরীক্ষা নির্বাচন করুন</h2>
+
           <p className="mt-2 text-sm text-base-content/60">
             বিভাগ ও পরীক্ষার ধরন বেছে নিলে পরীক্ষার তালিকা আসবে।
           </p>
@@ -510,9 +831,11 @@ export default function ExamResults() {
             <p className="text-sm font-medium text-primary">
               {examType === "online" ? "অনলাইন পরীক্ষা" : "অফলাইন পরীক্ষা"}
             </p>
+
             <h2 className="mt-1 text-xl font-bold">
               {getExamTitle(selectedExam)}
             </h2>
+
             {selectedExam.examDate && (
               <p className="mt-2 text-sm text-base-content/60">
                 পরীক্ষার তারিখ: {selectedExam.examDate}
@@ -530,6 +853,7 @@ export default function ExamResults() {
               <div className="grid grid-cols-2 gap-3 lg:grid-cols-5">
                 <div className="rounded-2xl border border-base-300 bg-base-100 p-4">
                   <p className="text-sm text-base-content/60">অংশগ্রহণ</p>
+
                   <p className="mt-1 text-2xl font-extrabold text-primary">
                     {rows.length}
                     <span className="text-base font-medium text-base-content/50">
@@ -538,33 +862,41 @@ export default function ExamResults() {
                     </span>
                   </p>
                 </div>
+
                 <div className="rounded-2xl border border-base-300 bg-base-100 p-4">
                   <p className="text-sm text-base-content/60">অনুপস্থিত</p>
+
                   <p className="mt-1 text-2xl font-extrabold">
                     {absent.length}
                   </p>
                 </div>
+
                 <div className="rounded-2xl border border-base-300 bg-base-100 p-4">
                   <p className="text-sm text-base-content/60">গড় নম্বর</p>
+
                   <p className="mt-1 text-2xl font-extrabold">
                     {stats ? formatNumber(stats.average) : "—"}
                   </p>
                 </div>
+
                 <div className="rounded-2xl border border-base-300 bg-base-100 p-4">
                   <p className="text-sm text-base-content/60">সর্বোচ্চ</p>
+
                   <p className="mt-1 text-2xl font-extrabold text-success">
                     {stats ? formatNumber(stats.highest) : "—"}
                   </p>
                 </div>
+
                 <div className="col-span-2 rounded-2xl border border-base-300 bg-base-100 p-4 lg:col-span-1">
                   <p className="text-sm text-base-content/60">সর্বনিম্ন</p>
+
                   <p className="mt-1 text-2xl font-extrabold text-error">
                     {stats ? formatNumber(stats.lowest) : "—"}
                   </p>
                 </div>
               </div>
 
-              {/* Table */}
+              {/* Results table */}
               <div className="overflow-hidden rounded-2xl border border-base-300 bg-base-100 shadow-sm">
                 <div className="flex flex-wrap items-center gap-3 border-b border-base-300 p-4">
                   <h3 className="mr-auto font-bold">ফলাফলের তালিকা</h3>
@@ -600,6 +932,7 @@ export default function ExamResults() {
                 {visibleRows.length === 0 && visibleAbsent.length === 0 ? (
                   <div className="p-10 text-center">
                     <p className="font-semibold">ফলাফল পাওয়া যায়নি</p>
+
                     <p className="mt-2 text-sm text-base-content/60">
                       {term
                         ? "এই নামে বা আইডিতে কোনো শিক্ষার্থী নেই।"
@@ -617,6 +950,7 @@ export default function ExamResults() {
                           <th>ব্যাচ</th>
                           <th>প্রাপ্ত নম্বর</th>
                           <th>শতকরা</th>
+                          {isAdmin && <th className="text-center">অ্যাকশন</th>}
                         </tr>
                       </thead>
 
@@ -628,19 +962,67 @@ export default function ExamResults() {
                                 {row.rank}
                               </span>
                             </td>
+
                             <td className="font-medium">{row.name}</td>
+
                             <td>{row.studentId || "—"}</td>
+
                             <td>{row.className}</td>
+
                             <td>
                               <span className="font-bold">
                                 {formatNumber(row.score)}
                               </span>
+
                               <span className="text-base-content/50">
                                 {" "}
                                 / {row.total ? formatNumber(row.total) : "—"}
                               </span>
                             </td>
+
                             <td>{formatPercent(row.percent)}</td>
+
+                            {isAdmin && (
+                              <td>
+                                <div className="flex items-center justify-center gap-2">
+                                  <button
+                                    type="button"
+                                    className="btn btn-success btn-xs sm:btn-sm"
+                                    title="১ নম্বর বাড়ান"
+                                    aria-label={`${row.name}-এর নম্বর ১ বাড়ান`}
+                                    onClick={() => handleIncreaseMark(row)}
+                                    disabled={
+                                      updatingResultId === row.id ||
+                                      deletingResultId === row.id
+                                    }
+                                  >
+                                    {updatingResultId === row.id ? (
+                                      <span className="loading loading-spinner loading-xs" />
+                                    ) : (
+                                      <FaPlus />
+                                    )}
+                                  </button>
+
+                                  <button
+                                    type="button"
+                                    className="btn btn-error btn-xs sm:btn-sm"
+                                    title="ফলাফল মুছুন"
+                                    aria-label={`${row.name}-এর ফলাফল মুছুন`}
+                                    onClick={() => handleDeleteResult(row)}
+                                    disabled={
+                                      deletingResultId === row.id ||
+                                      updatingResultId === row.id
+                                    }
+                                  >
+                                    {deletingResultId === row.id ? (
+                                      <span className="loading loading-spinner loading-xs" />
+                                    ) : (
+                                      <FaTrash />
+                                    )}
+                                  </button>
+                                </div>
+                              </td>
+                            )}
                           </tr>
                         ))}
 
@@ -651,11 +1033,18 @@ export default function ExamResults() {
                                 অনুপস্থিত
                               </span>
                             </td>
+
                             <td className="font-medium">{item.name}</td>
+
                             <td>{item.studentId || "—"}</td>
+
                             <td>{item.className}</td>
+
                             <td>—</td>
+
                             <td>—</td>
+
+                            {isAdmin && <td />}
                           </tr>
                         ))}
                       </tbody>

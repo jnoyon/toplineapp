@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
+
 import { useNavigate } from "react-router";
 
 import {
@@ -11,11 +12,12 @@ import {
   serverTimestamp,
   updateDoc,
   where,
-  writeBatch,
 } from "firebase/firestore";
 
 import { onAuthStateChanged } from "firebase/auth";
+
 import Swal from "sweetalert2";
+
 import toast from "react-hot-toast";
 
 import { auth, db } from "../assets/firebase/firebase.init";
@@ -32,19 +34,25 @@ import { departments } from "../config/departments";
 const IMGBB_API_KEY = import.meta.env.VITE_IMGBB_API_KEY;
 
 // --------------------------------------------------
+
 // Helpers
+
 // --------------------------------------------------
 
 const normalize = (value) =>
   String(value ?? "")
     .trim()
+
     .toLowerCase()
+
     .replace(/\s+/g, " ");
 
 const getInitials = (name) =>
   String(name || "?")
     .trim()
+
     .slice(0, 2)
+
     .toUpperCase();
 
 const getPhoto = (student) =>
@@ -68,15 +76,12 @@ const isCareStudent = (student) =>
   normalize(student.departmentName).includes("কেয়ার") ||
   normalize(student.departmentName).includes("care");
 
-const isStudentActive = (student) =>
-  student.isActive !== false &&
-  student.status !== "disabled" &&
-  student.status !== "inactive" &&
-  student.status !== "blocked";
+const isStudentActive = (student) => student?.approved === true;
 
 const getDepartmentPermissions = (profile) => {
   const permissions = [
     ...(profile?.departmentIds || []),
+
     ...(profile?.departments || []).map((item) =>
       typeof item === "object"
         ? (item.departmentId ?? item.id ?? item.name)
@@ -110,20 +115,27 @@ const hasDepartmentPermission = (department, permissions) => {
 
 const initialForm = {
   fatherName: "",
+
   motherName: "",
+
   dateOfBirth: "",
+
   religion: "",
+
   roll: "",
 };
 
 // --------------------------------------------------
+
 // Reusable Components
+
 // --------------------------------------------------
 
 function Loading() {
   return (
     <div className="flex min-h-64 flex-col items-center justify-center gap-3">
       <span className="loading loading-spinner loading-lg text-primary" />
+
       <p className="text-sm text-base-content/60">
         শিক্ষার্থীদের তথ্য লোড হচ্ছে...
       </p>
@@ -133,6 +145,7 @@ function Loading() {
 
 function StudentAvatar({ student }) {
   const [imageError, setImageError] = useState(false);
+
   const photo = getPhoto(student);
 
   useEffect(() => {
@@ -160,121 +173,91 @@ function Info({ label, value }) {
   return (
     <div className="min-w-0">
       <p className="text-[11px] text-base-content/50">{label}</p>
+
       <p className="mt-0.5 truncate text-sm font-medium">{value || "—"}</p>
     </div>
   );
 }
 
 // --------------------------------------------------
-// Batch Mark Processing
-// --------------------------------------------------
 
-async function processBatchMarks(batchId, amount, mode) {
-  // batchId দিয়ে শুধু নির্বাচিত ব্যাচের শিক্ষার্থী খোঁজা হবে।
-  // Attendance collection নয়, students collection update হবে।
-
-  const studentsQuery = query(
-    collection(db, "students"),
-    where("batchId", "==", batchId),
-  );
-
-  const snapshot = await getDocs(studentsQuery);
-
-  if (snapshot.empty) {
-    throw new Error("এই ব্যাচে কোনো শিক্ষার্থী পাওয়া যায়নি।");
-  }
-
-  // অতিরিক্ত নিরাপত্তা: TopLine Care-এর শিক্ষার্থী ছাড়া অন্য কাউকে
-  // update করা হবে না।
-
-  const documents = snapshot.docs.filter((item) => isCareStudent(item.data()));
-
-  if (!documents.length) {
-    throw new Error("এই ব্যাচে TopLine Care-এর শিক্ষার্থী পাওয়া যায়নি।");
-  }
-
-  // Firestore batch write limit 500.
-  // নিরাপত্তার জন্য প্রতি batch-এ 450টি write.
-
-  for (let i = 0; i < documents.length; i += 450) {
-    const batch = writeBatch(db);
-
-    documents.slice(i, i + 450).forEach((studentDoc) => {
-      const studentRef = doc(db, "students", studentDoc.id);
-
-      batch.update(studentRef, {
-        currentMark: mode === "reset" ? 0 : increment(amount),
-
-        currentMarkPeriod: `care:${batchId}`,
-
-        currentMarkUpdatedAt: serverTimestamp(),
-      });
-    });
-
-    await batch.commit();
-  }
-
-  return documents.length;
-}
-
-// --------------------------------------------------
 // Main Component
+
 // --------------------------------------------------
 
 export default function Students() {
   const navigate = useNavigate();
 
   // Authentication
+
   const [profile, setProfile] = useState(null);
+
   const [role, setRole] = useState("");
 
   // Department
+
   const [departmentsList, setDepartmentsList] = useState([]);
+
   const [departmentPermissions, setDepartmentPermissions] = useState([]);
 
   // Students
+
   const [students, setStudents] = useState([]);
 
   // Filters
+
   const [departmentName, setDepartmentName] = useState("");
+
   const [classBatchName, setClassBatchName] = useState("");
+
   const [search, setSearch] = useState("");
 
   // Loading
+
   const [loading, setLoading] = useState(true);
+
   const [updatingId, setUpdatingId] = useState("");
-  const [batchActionLoading, setBatchActionLoading] = useState(false);
+  const [markUpdatingId, setMarkUpdatingId] = useState("");
 
   // Edit Profile
+
   const [editingStudent, setEditingStudent] = useState(null);
+
   const [editForm, setEditForm] = useState(initialForm);
+
   const [editPhoto, setEditPhoto] = useState(null);
+
   const [editPreview, setEditPreview] = useState("");
 
   const [savingProfile, setSavingProfile] = useState(false);
+
   const [uploadingPhoto, setUploadingPhoto] = useState(false);
+
   const [deletingPhoto, setDeletingPhoto] = useState(false);
 
   // --------------------------------------------------
+
   // Permissions.js Compatibility
+
   // --------------------------------------------------
 
   const isAdminUser = role === "admin";
+
   const isDepartmentHeadUser = role === "departmenthead";
+
   const isTeacher = role === "teacher";
+
   const isExamControllerUser = role === "exam-controller";
 
   const canViewStudents = isAdminUser || isDepartmentHeadUser || isTeacher;
 
   const canManageStudents = isAdminUser || isDepartmentHeadUser;
-
-  // Batch mark শুধু Admin পরিচালনা করবেন।
-  const canManageBatchMarks = isAdminUser;
-
   const profileBusy = savingProfile || uploadingPhoto || deletingPhoto;
 
   // --------------------------------------------------
+
   // Authentication & Initial Data
+
   // --------------------------------------------------
 
   useEffect(() => {
@@ -287,20 +270,29 @@ export default function Students() {
 
       if (!user) {
         setProfile(null);
+
         setRole("");
+
         setStudents([]);
+
         setDepartmentsList([]);
+
         setDepartmentPermissions([]);
+
         setLoading(false);
+
         return;
       }
 
       try {
         // Admin-এর জন্য Firestore profile বাধ্যতামূলক নয়।
+
         // permissions.js-এর email allowlist থেকেই Admin নির্ধারিত হবে।
 
         const admin = isAdmin(user.email);
+
         const departmentHead = isDepartmentHead(user.email);
+
         const examController = isExamController(user.email);
 
         let userProfile = {};
@@ -313,6 +305,7 @@ export default function Students() {
 
         const currentUser = {
           ...userProfile,
+
           email: user.email,
         };
 
@@ -327,6 +320,7 @@ export default function Students() {
               : userRole;
 
         // Account access check
+
         const disabled =
           userProfile.accountAccess === false || userProfile.isActive === false;
 
@@ -334,12 +328,17 @@ export default function Students() {
           if (!active) return;
 
           setProfile(userProfile);
+
           setRole("");
+
           setStudents([]);
+
           setDepartmentsList([]);
+
           setLoading(false);
 
           toast.error("আপনার অ্যাকাউন্ট নিষ্ক্রিয়।");
+
           return;
         }
 
@@ -347,10 +346,15 @@ export default function Students() {
           if (!active) return;
 
           setProfile(userProfile);
+
           setRole(finalRole);
+
           setStudents([]);
+
           setDepartmentsList([]);
+
           setLoading(false);
+
           return;
         }
 
@@ -368,20 +372,27 @@ export default function Students() {
           if (!active) return;
 
           setProfile(userProfile);
+
           setRole(finalRole);
+
           setStudents([]);
+
           setDepartmentsList([]);
+
           setLoading(false);
 
           toast.error("আপনার কোনো বিভাগে অনুমতি নেই।");
+
           return;
         }
 
         // Students
+
         const studentSnapshot = await getDocs(collection(db, "students"));
 
         const allStudents = studentSnapshot.docs.map((item) => ({
           ...item.data(),
+
           id: item.id,
         }));
 
@@ -398,12 +409,17 @@ export default function Students() {
         if (!active) return;
 
         setProfile(userProfile);
+
         setRole(finalRole);
+
         setDepartmentPermissions(permissions);
+
         setDepartmentsList(allowedDepartments);
+
         setStudents(allowedStudents);
 
         // একটিমাত্র বিভাগ অনুমোদিত হলে সেটি স্বয়ংক্রিয়ভাবে select হবে।
+
         setDepartmentName(
           !admin && allowedDepartments.length === 1
             ? allowedDepartments[0].name
@@ -413,6 +429,7 @@ export default function Students() {
         setClassBatchName("");
       } catch (error) {
         console.error("Students loading error:", error);
+
         toast.error("শিক্ষার্থীদের তথ্য লোড করা যায়নি।");
       } finally {
         if (active) setLoading(false);
@@ -421,12 +438,15 @@ export default function Students() {
 
     return () => {
       active = false;
+
       unsubscribe();
     };
   }, []);
 
   // --------------------------------------------------
+
   // Department & Batch
+
   // --------------------------------------------------
 
   const selectedDepartment = useMemo(
@@ -434,11 +454,13 @@ export default function Students() {
       departmentsList.find(
         (item) => normalize(item.name) === normalize(departmentName),
       ),
+
     [departmentsList, departmentName],
   );
 
   const classBatchOptions = useMemo(
     () => selectedDepartment?.classes || [],
+
     [selectedDepartment],
   );
 
@@ -455,12 +477,15 @@ export default function Students() {
 
     return {
       id: batch.id || batch.batchId,
+
       name: batch.name,
     };
   }, [selectedDepartment, classBatchOptions, classBatchName]);
 
   // --------------------------------------------------
+
   // Student Filtering
+
   // --------------------------------------------------
 
   const filteredStudents = useMemo(() => {
@@ -478,17 +503,28 @@ export default function Students() {
 
       const searchable = [
         student.name,
+
         student.studentName,
+
         student.studentId,
+
         student.phone,
+
         student.mobile,
+
         getFatherName(student),
+
         student.villageName,
+
         student.className,
+
         student.batchName,
+
         student.departmentName,
       ]
+
         .map(normalize)
+
         .join(" ");
 
       return (
@@ -502,139 +538,116 @@ export default function Students() {
   const activeCount = filteredStudents.filter(isStudentActive).length;
 
   // --------------------------------------------------
-  // Batch Mark Actions
+  // Individual Student Mark Management (TopLine Care)
   // --------------------------------------------------
 
-  async function handleBatchMarkAction(mode) {
-    if (!canManageBatchMarks) {
-      toast.error("শুধু Admin এই কাজটি করতে পারবেন।");
+  async function handleIndividualMarkAction(student, mode = "add") {
+    if (!isAdminUser || !isCareStudent(student)) {
+      toast.error(
+        "শুধু Admin TopLine Care শিক্ষার্থীর মার্ক পরিবর্তন করতে পারবেন।",
+      );
       return;
     }
-
-    if (!selectedBatch?.id || batchActionLoading) {
-      if (!selectedBatch?.id) {
-        toast.error("ব্যাচের ID পাওয়া যায়নি।");
-      }
-      return;
-    }
+    if (markUpdatingId) return;
 
     let amount = 0;
-
     if (mode === "add") {
       const inputResult = await Swal.fire({
-        title: "মার্ক যোগ করুন",
+        title: "ব্যক্তিগত মার্ক যোগ করুন",
         input: "number",
-        inputLabel: `${selectedBatch.name} ব্যাচের প্রত্যেক শিক্ষার্থীর সঙ্গে কত মার্ক যোগ করবেন?`,
+        inputLabel: `${student.name || "শিক্ষার্থী"}-এর সঙ্গে কত মার্ক যোগ করবেন?`,
         inputPlaceholder: "যেমন: 2",
-        inputAttributes: {
-          min: 1,
-          step: 1,
-        },
+        inputAttributes: { min: 1, step: 1 },
         showCancelButton: true,
         confirmButtonText: "মার্ক যোগ করুন",
         cancelButtonText: "বাতিল",
-        confirmButtonColor: "#2563eb",
         inputValidator: (value) => {
           if (!value || !Number.isInteger(Number(value)) || Number(value) < 1) {
-            return "সঠিক পূর্ণসংখ্যা লিখুন।";
+            return "সঠিক ধনাত্মক পূর্ণসংখ্যা লিখুন।";
           }
         },
       });
-
       if (!inputResult.isConfirmed) return;
-
       amount = Number(inputResult.value);
     }
 
-    const isReset = mode === "reset";
-
+    const currentMark = Number(student.currentMark) || 0;
+    const nextMark = mode === "reset" ? 0 : currentMark + amount;
     const confirmation = await Swal.fire({
-      title: isReset
-        ? "ব্যাচের মার্ক Reset করবেন?"
-        : "ব্যাচের মার্ক যোগ করবেন?",
-
-      html: `
-        <div style="font-size:14px;line-height:1.8">
-          <b>${selectedBatch.name}</b><br/>
-          ${
-            isReset
-              ? "এই ব্যাচের সকল শিক্ষার্থীর Current Mark শূন্য করা হবে।"
-              : `প্রত্যেক শিক্ষার্থীর বর্তমান মার্কের সঙ্গে <b>${amount}</b> যোগ হবে।`
-          }
-          <br/><br/>
-          <span style="color:#dc2626">
-            এই কাজটি শুধু নির্বাচিত ব্যাচে কার্যকর হবে।
-          </span>
-        </div>
-      `,
-
+      title:
+        mode === "reset"
+          ? "এই শিক্ষার্থীর মার্ক Reset করবেন?"
+          : "মার্ক যোগ নিশ্চিত করুন",
+      html: `<div style="font-size:14px;line-height:1.8">
+        <b>${student.name || "শিক্ষার্থী"}</b><br/>
+        বর্তমান মার্ক: <b>${currentMark}</b><br/>
+        ${mode === "reset" ? "নতুন মার্ক হবে ০।" : `যোগ হবে: <b>${amount}</b><br/>নতুন মার্ক: <b>${nextMark}</b>`}
+        <br/><span style="color:#dc2626">শুধু এই শিক্ষার্থীর মার্ক পরিবর্তন হবে।</span>
+      </div>`,
       icon: "warning",
       showCancelButton: true,
-      confirmButtonText: isReset ? "হ্যাঁ, Reset করুন" : "হ্যাঁ, যোগ করুন",
+      confirmButtonText:
+        mode === "reset" ? "হ্যাঁ, Reset করুন" : "হ্যাঁ, যোগ করুন",
       cancelButtonText: "বাতিল",
-      confirmButtonColor: isReset ? "#dc2626" : "#2563eb",
+      confirmButtonColor: mode === "reset" ? "#dc2626" : "#2563eb",
       reverseButtons: true,
     });
-
     if (!confirmation.isConfirmed) return;
 
-    setBatchActionLoading(true);
-
+    setMarkUpdatingId(student.id);
     const loadingToast = toast.loading("মার্ক আপডেট হচ্ছে...");
-
     try {
-      const count = await processBatchMarks(selectedBatch.id, amount, mode);
+      const markUpdate = {
+        currentMark: mode === "reset" ? 0 : increment(amount),
+        currentMarkUpdatedAt: serverTimestamp(),
+        updatedAt: serverTimestamp(),
+        updatedBy: auth.currentUser?.uid || "",
+      };
+      if (student.batchId)
+        markUpdate.currentMarkPeriod = `care:${student.batchId}`;
 
-      // Local state update
+      await updateDoc(doc(db, "students", student.id), markUpdate);
       setStudents((previous) =>
-        previous.map((student) => {
-          if (
-            String(student.batchId) !== String(selectedBatch.id) ||
-            !isCareStudent(student)
-          ) {
-            return student;
-          }
-
-          return {
-            ...student,
-            currentMark:
-              mode === "reset"
-                ? 0
-                : (Number(student.currentMark) || 0) + amount,
-            currentMarkPeriod: `care:${selectedBatch.id}`,
-          };
-        }),
+        previous.map((item) =>
+          item.id !== student.id
+            ? item
+            : {
+                ...item,
+                currentMark: nextMark,
+                ...(student.batchId
+                  ? { currentMarkPeriod: `care:${student.batchId}` }
+                  : {}),
+              },
+        ),
       );
 
       toast.dismiss(loadingToast);
-
       await Swal.fire({
         title: "সফল হয়েছে!",
-        text: `${count} জন শিক্ষার্থীর মার্ক ${
-          isReset ? "Reset করা হয়েছে।" : "আপডেট করা হয়েছে।"
-        }`,
+        text: `${student.name || "শিক্ষার্থী"}-এর বর্তমান মার্ক ${nextMark}।`,
         icon: "success",
         confirmButtonText: "ঠিক আছে",
       });
     } catch (error) {
-      console.error("Batch mark error:", error);
-
+      console.error("Individual mark update error:", error);
       toast.dismiss(loadingToast);
-
-      toast.error(error.message || "মার্ক আপডেট করা যায়নি।");
+      toast.error("মার্ক আপডেট করা যায়নি। আবার চেষ্টা করুন।");
     } finally {
-      setBatchActionLoading(false);
+      setMarkUpdatingId("");
     }
   }
 
   // --------------------------------------------------
+
   // Student Active / Inactive
+
   // --------------------------------------------------
 
   async function handleToggleStatus(student) {
     if (!canManageStudents || updatingId) return;
 
     const currentlyActive = isStudentActive(student);
+
     const newStatus = !currentlyActive;
 
     const result = await Swal.fire({
@@ -643,10 +656,15 @@ export default function Students() {
         : "শিক্ষার্থী নিষ্ক্রিয় করবেন?",
 
       text: student.name,
+
       icon: "question",
+
       showCancelButton: true,
+
       confirmButtonText: "নিশ্চিত করুন",
+
       cancelButtonText: "বাতিল",
+
       reverseButtons: true,
     });
 
@@ -656,9 +674,10 @@ export default function Students() {
 
     try {
       await updateDoc(doc(db, "students", student.id), {
-        isActive: newStatus,
-        status: newStatus ? "approved" : "disabled",
+        approved: newStatus,
+
         updatedAt: serverTimestamp(),
+
         updatedBy: auth.currentUser?.uid || "",
       });
 
@@ -667,8 +686,8 @@ export default function Students() {
           item.id === student.id
             ? {
                 ...item,
-                isActive: newStatus,
-                status: newStatus ? "approved" : "disabled",
+
+                approved: newStatus,
               }
             : item,
         ),
@@ -677,6 +696,7 @@ export default function Students() {
       toast.success("Status আপডেট হয়েছে।");
     } catch (error) {
       console.error(error);
+
       toast.error("Status পরিবর্তন করা যায়নি।");
     } finally {
       setUpdatingId("");
@@ -684,7 +704,9 @@ export default function Students() {
   }
 
   // --------------------------------------------------
+
   // Make CR
+
   // --------------------------------------------------
 
   async function handleMakeCR(student) {
@@ -694,10 +716,15 @@ export default function Students() {
 
     const result = await Swal.fire({
       title: "Make CR?",
+
       text: `${student.name}-কে CR নির্বাচন করবেন?`,
+
       icon: "question",
+
       showCancelButton: true,
+
       confirmButtonText: "হ্যাঁ",
+
       cancelButtonText: "বাতিল",
     });
 
@@ -708,7 +735,9 @@ export default function Students() {
     try {
       await updateDoc(doc(db, "students", student.id), {
         isCR: true,
+
         updatedAt: serverTimestamp(),
+
         updatedBy: auth.currentUser?.uid || "",
       });
 
@@ -721,6 +750,7 @@ export default function Students() {
       toast.success("CR নির্বাচন করা হয়েছে।");
     } catch (error) {
       console.error(error);
+
       toast.error("CR নির্বাচন করা যায়নি।");
     } finally {
       setUpdatingId("");
@@ -728,7 +758,9 @@ export default function Students() {
   }
 
   // --------------------------------------------------
+
   // Edit Profile
+
   // --------------------------------------------------
 
   function openEditProfile(student) {
@@ -743,6 +775,7 @@ export default function Students() {
       !hasDepartmentPermission(department, departmentPermissions)
     ) {
       toast.error("এই শিক্ষার্থীর তথ্য সম্পাদনার অনুমতি নেই।");
+
       return;
     }
 
@@ -750,13 +783,18 @@ export default function Students() {
 
     setEditForm({
       fatherName: getFatherName(student),
+
       motherName: student.motherName || student.mother || "",
+
       dateOfBirth: student.dateOfBirth || "",
+
       religion: student.religion || "",
+
       roll: String(student.roll ?? ""),
     });
 
     setEditPhoto(null);
+
     setEditPreview(getPhoto(student));
   }
 
@@ -768,8 +806,11 @@ export default function Students() {
     }
 
     setEditingStudent(null);
+
     setEditForm(initialForm);
+
     setEditPhoto(null);
+
     setEditPreview("");
   }
 
@@ -778,53 +819,65 @@ export default function Students() {
 
     setEditForm((previous) => ({
       ...previous,
+
       [name]: value,
     }));
   }
 
   function handleEditPhotoSelect(event) {
     const file = event.target.files?.[0];
+
     event.target.value = "";
 
     if (!file) return;
 
     if (!file.type.startsWith("image/")) {
       toast.error("শুধু ছবি নির্বাচন করুন।");
+
       return;
     }
 
     if (file.size > 5 * 1024 * 1024) {
       toast.error("ছবি সর্বোচ্চ ৫ MB হতে পারবে।");
+
       return;
     }
 
     if (editPreview) {
       toast.error("আগের ছবি মুছে নতুন ছবি নির্বাচন করুন।");
+
       return;
     }
 
     setEditPhoto(file);
+
     setEditPreview(URL.createObjectURL(file));
   }
 
   // --------------------------------------------------
+
   // Image Resize
+
   // --------------------------------------------------
 
   async function resizeImage(file) {
     const url = URL.createObjectURL(file);
+
     const image = new Image();
 
     try {
       await new Promise((resolve, reject) => {
         image.onload = resolve;
+
         image.onerror = reject;
+
         image.src = url;
       });
 
       const canvas = document.createElement("canvas");
 
       canvas.width = 200;
+
       canvas.height = 200;
 
       const size = Math.min(image.width, image.height);
@@ -833,13 +886,21 @@ export default function Students() {
 
       context.drawImage(
         image,
+
         (image.width - size) / 2,
+
         (image.height - size) / 2,
+
         size,
+
         size,
+
         0,
+
         0,
+
         200,
+
         200,
       );
 
@@ -847,7 +908,9 @@ export default function Students() {
         canvas.toBlob(
           (blob) =>
             blob ? resolve(blob) : reject(new Error("ছবি Resize করা যায়নি।")),
+
           "image/jpeg",
+
           0.9,
         );
       });
@@ -857,7 +920,9 @@ export default function Students() {
   }
 
   // --------------------------------------------------
+
   // Image Upload
+
   // --------------------------------------------------
 
   async function uploadEditPhoto() {
@@ -871,14 +936,17 @@ export default function Students() {
 
     try {
       const blob = await resizeImage(editPhoto);
+
       const body = new FormData();
 
       body.append("image", blob, "student-profile.jpg");
 
       const response = await fetch(
         `https://api.imgbb.com/1/upload?key=${IMGBB_API_KEY}`,
+
         {
           method: "POST",
+
           body,
         },
       );
@@ -891,6 +959,7 @@ export default function Students() {
 
       return {
         photoURL: result.data.url,
+
         photoDeleteURL: result.data.delete_url,
       };
     } finally {
@@ -899,7 +968,9 @@ export default function Students() {
   }
 
   // --------------------------------------------------
+
   // Delete Photo
+
   // --------------------------------------------------
 
   async function handleDeleteEditPhoto() {
@@ -909,10 +980,15 @@ export default function Students() {
 
     const result = await Swal.fire({
       title: "ছবি মুছবেন?",
+
       text: "আগের ছবিটি মুছে যাবে।",
+
       icon: "warning",
+
       showCancelButton: true,
+
       confirmButtonText: "হ্যাঁ, মুছুন",
+
       cancelButtonText: "বাতিল",
     });
 
@@ -922,10 +998,14 @@ export default function Students() {
 
     try {
       // নতুন ছবি নির্বাচন করে থাকলে শুধু preview বাতিল হবে।
+
       if (editPhoto) {
         URL.revokeObjectURL(editPreview);
+
         setEditPhoto(null);
+
         setEditPreview("");
+
         return;
       }
 
@@ -943,12 +1023,19 @@ export default function Students() {
 
       const cleared = {
         photoURL: "",
+
         photoUrl: "",
+
         imageUrl: "",
+
         photo: "",
+
         image: "",
+
         profileImage: "",
+
         photoDeleteURL: "",
+
         updatedAt: serverTimestamp(),
       };
 
@@ -962,12 +1049,14 @@ export default function Students() {
 
       setEditingStudent((previous) => ({
         ...previous,
+
         ...cleared,
       }));
 
       setEditPreview("");
     } catch (error) {
       console.error(error);
+
       toast.error(error.message || "ছবি মুছতে সমস্যা হয়েছে।");
     } finally {
       setDeletingPhoto(false);
@@ -975,7 +1064,9 @@ export default function Students() {
   }
 
   // --------------------------------------------------
+
   // Save Profile
+
   // --------------------------------------------------
 
   async function handleSaveProfile(event) {
@@ -990,14 +1081,19 @@ export default function Students() {
 
       const updatedData = {
         fatherName: editForm.fatherName.trim(),
+
         motherName: editForm.motherName.trim(),
+
         dateOfBirth: editForm.dateOfBirth,
+
         religion: editForm.religion,
+
         roll: editForm.roll.trim(),
 
         ...photoData,
 
         updatedAt: serverTimestamp(),
+
         updatedBy: auth.currentUser?.uid || "",
       };
 
@@ -1010,9 +1106,11 @@ export default function Students() {
       );
 
       toast.success("প্রোফাইল আপডেট হয়েছে।");
+
       closeEditProfile();
     } catch (error) {
       console.error(error);
+
       toast.error(error.message || "প্রোফাইল আপডেট করা যায়নি।");
     } finally {
       setSavingProfile(false);
@@ -1020,7 +1118,9 @@ export default function Students() {
   }
 
   // --------------------------------------------------
+
   // Access Control
+
   // --------------------------------------------------
 
   if (loading) return <Loading />;
@@ -1038,7 +1138,9 @@ export default function Students() {
   }
 
   // --------------------------------------------------
+
   // UI
+
   // --------------------------------------------------
 
   return (
@@ -1101,6 +1203,7 @@ export default function Students() {
                 disabled={!isAdminUser && departmentsList.length === 1}
                 onChange={(event) => {
                   setDepartmentName(event.target.value);
+
                   setClassBatchName("");
                 }}
               >
@@ -1149,57 +1252,6 @@ export default function Students() {
               />
             </label>
           </div>
-
-          {/* Batch Mark Management */}
-
-          {canManageBatchMarks && selectedBatch && (
-            <div className="mt-4 rounded-2xl border border-primary/20 bg-gradient-to-r from-primary/10 to-base-100 p-4">
-              <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
-                <div>
-                  <h3 className="text-sm font-bold">
-                    ব্যাচের মার্ক ব্যবস্থাপনা
-                  </h3>
-
-                  <p className="mt-1 text-xs text-base-content/55">
-                    {selectedBatch.name} — এই ব্যাচের শিক্ষার্থীদের মার্ক
-                    পরিচালনা করুন।
-                  </p>
-                </div>
-
-                <span className="badge badge-primary badge-sm">Admin Only</span>
-              </div>
-
-              <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
-                <button
-                  type="button"
-                  disabled={batchActionLoading}
-                  onClick={() => handleBatchMarkAction("add")}
-                  className="btn btn-primary btn-sm"
-                >
-                  {batchActionLoading ? (
-                    <span className="loading loading-spinner loading-xs" />
-                  ) : (
-                    "+"
-                  )}
-                  Add Batch Mark
-                </button>
-
-                <button
-                  type="button"
-                  disabled={batchActionLoading}
-                  onClick={() => handleBatchMarkAction("reset")}
-                  className="btn btn-outline btn-error btn-sm"
-                >
-                  {batchActionLoading ? (
-                    <span className="loading loading-spinner loading-xs" />
-                  ) : (
-                    "↻"
-                  )}
-                  Reset Batch Mark
-                </button>
-              </div>
-            </div>
-          )}
         </section>
 
         {/* Student List */}
@@ -1216,6 +1268,7 @@ export default function Students() {
           <section className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-3">
             {filteredStudents.map((student) => {
               const active = isStudentActive(student);
+
               const phone = getPhone(student);
 
               const studentRouteId = student.studentId || student.id;
@@ -1301,6 +1354,17 @@ export default function Students() {
 
                   {/* Main Actions */}
 
+                  {careStudent && (
+                    <div className="flex items-center justify-between border-t border-base-300 bg-base-200/50 px-4 py-2">
+                      <span className="text-xs text-base-content/60">
+                        বর্তমান মার্ক
+                      </span>
+                      <span className="badge badge-primary badge-lg">
+                        {Number(student.currentMark) || 0}
+                      </span>
+                    </div>
+                  )}
+
                   <div className="flex gap-2 border-t border-base-300 p-3">
                     {phone ? (
                       <a
@@ -1340,6 +1404,36 @@ export default function Students() {
                         Edit Profile
                       </button>
 
+                      {isAdminUser && careStudent && (
+                        <>
+                          <button
+                            type="button"
+                            disabled={markUpdatingId === student.id}
+                            onClick={() =>
+                              handleIndividualMarkAction(student, "add")
+                            }
+                            className="btn btn-primary btn-xs"
+                          >
+                            {markUpdatingId === student.id
+                              ? "Updating..."
+                              : "+ মার্ক যোগ"}
+                          </button>
+                          <button
+                            type="button"
+                            disabled={
+                              markUpdatingId === student.id ||
+                              !(Number(student.currentMark) > 0)
+                            }
+                            onClick={() =>
+                              handleIndividualMarkAction(student, "reset")
+                            }
+                            className="btn btn-outline btn-error btn-xs"
+                          >
+                            মার্ক Reset
+                          </button>
+                        </>
+                      )}
+
                       <label className="flex cursor-pointer items-center justify-center gap-2 rounded-lg border border-base-300 text-xs">
                         <input
                           type="checkbox"
@@ -1375,9 +1469,11 @@ export default function Students() {
         )}
       </div>
 
-      {/* --------------------------------------------------
+      {/* --------------------------------------------------*
+
           Edit Profile Modal
-      -------------------------------------------------- */}
+
+*      -------------------------------------------------- */}
 
       {editingStudent && (
         <div
@@ -1466,7 +1562,9 @@ export default function Students() {
                       disabled={profileBusy}
                       onClick={() => {
                         URL.revokeObjectURL(editPreview);
+
                         setEditPhoto(null);
+
                         setEditPreview("");
                       }}
                     >
@@ -1480,8 +1578,11 @@ export default function Students() {
                 <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
                   {[
                     ["fatherName", "বাবার নাম", "text"],
+
                     ["motherName", "মায়ের নাম", "text"],
+
                     ["dateOfBirth", "জন্মতারিখ", "date"],
+
                     ["roll", "রোল নম্বর", "text"],
                   ].map(([name, label, type]) => (
                     <label key={name} className="form-control">
@@ -1514,9 +1615,13 @@ export default function Students() {
 
                       {[
                         "ইসলাম",
+
                         "হিন্দু",
+
                         "বৌদ্ধ",
+
                         "খ্রিস্টান",
+
                         "অন্যান্য",
                       ].map((item) => (
                         <option key={item} value={item}>

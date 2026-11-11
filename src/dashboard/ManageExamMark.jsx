@@ -12,6 +12,7 @@ import {
 
 import { app } from "../assets/firebase/firebase.init";
 import { departmentList } from "../config/departments";
+import { calculateCurrentMark } from "../utils/calculateCurrentMark";
 
 import toast from "react-hot-toast";
 import Swal from "sweetalert2";
@@ -57,7 +58,7 @@ const getErrorMessage = (error) => {
     return "এই কাজের অনুমতি নেই। Firestore Rules যাচাই করুন।";
   }
 
-  return "কাজটি সম্পন্ন করা যায়নি। আবার চেষ্টা করুন।";
+  return error?.message || "কাজটি সম্পন্ন করা যায়নি। আবার চেষ্টা করুন।";
 };
 
 export default function ManageExamMark() {
@@ -102,7 +103,94 @@ export default function ManageExamMark() {
 
   const totalMark = Number(selectedExam?.totalMark || 0);
 
-  // Load exams using the same department/class filters as AddExamMark.
+  // Find the actual Firestore student document ID.
+  const findStudentDocumentId = useCallback(async (mark) => {
+    const possibleIds = [
+      mark?.studentDocumentId,
+      mark?.studentDocId,
+      mark?.studentRefId,
+      mark?.studentUid,
+      mark?.uid,
+      mark?.studentId,
+    ]
+      .map(normalizeId)
+      .filter(Boolean);
+
+    if (possibleIds.length === 0) {
+      throw new Error(
+        "Exam mark document-এ studentId বা studentDocumentId পাওয়া যায়নি।",
+      );
+    }
+
+    const studentsSnapshot = await getDocs(collection(db, "students"));
+
+    const matchedStudent = studentsSnapshot.docs.find((studentDoc) => {
+      const student = studentDoc.data();
+
+      const studentIdentifiers = [
+        studentDoc.id,
+        student.studentId,
+        student.uid,
+        student.studentUid,
+        student.authUid,
+        student.userId,
+        student.documentId,
+      ]
+        .map(normalizeId)
+        .filter(Boolean);
+
+      return possibleIds.some((id) => studentIdentifiers.includes(id));
+    });
+
+    if (!matchedStudent) {
+      throw new Error(
+        `Students collection-এ শিক্ষার্থী পাওয়া যায়নি। পরিচিত ID: ${possibleIds.join(", ")}`,
+      );
+    }
+
+    return matchedStudent.id;
+  }, []);
+
+  // Recalculate student's combined currentMark.
+  // This function NEVER updates student's point.
+  const recalculateStudentMark = useCallback(
+    async (mark) => {
+      try {
+        const studentDocumentId = await findStudentDocumentId(mark);
+
+        console.log("Recalculating currentMark for:", {
+          studentDocumentId,
+          studentId: mark?.studentId,
+          studentName: mark?.studentName,
+        });
+
+        const calculation = await calculateCurrentMark({
+          studentDocumentId,
+        });
+
+        console.log("CurrentMark recalculated successfully:", calculation);
+
+        return true;
+      } catch (error) {
+        console.error("CurrentMark recalculation failed:", {
+          mark,
+          message: error?.message,
+          code: error?.code,
+          error,
+        });
+
+        toast.error(
+          `Current Mark আপডেট হয়নি: ${error?.message || "Unknown error"}`,
+          { duration: 7000 },
+        );
+
+        return false;
+      }
+    },
+    [findStudentDocumentId],
+  );
+
+  // Load exams.
   const loadExams = useCallback(async () => {
     if (!departmentId || !classId) {
       setExams([]);
@@ -127,8 +215,6 @@ export default function ManageExamMark() {
 
           const examClassId = normalizeId(exam.classId || exam.batchId);
 
-          // Match department and class/batch.
-          // Do not filter by classType.
           return sameDepartment && examClassId === normalizeId(classId);
         })
         .sort((a, b) =>
@@ -137,13 +223,14 @@ export default function ManageExamMark() {
 
       setExams(filteredExams);
 
-      // Reset the selected exam only if it no longer exists.
       setExamId((currentId) =>
         filteredExams.some((exam) => exam.id === currentId) ? currentId : "",
       );
     } catch (error) {
       console.error("Load syllabus exams error:", error);
+
       toast.error(getErrorMessage(error));
+
       setExams([]);
       setExamId("");
     } finally {
@@ -155,7 +242,7 @@ export default function ManageExamMark() {
     loadExams();
   }, [loadExams]);
 
-  // Load marks for the selected exam.
+  // Load marks for selected exam.
   const loadMarks = useCallback(async () => {
     if (!examId) {
       setExamMarks([]);
@@ -184,7 +271,9 @@ export default function ManageExamMark() {
       setExamMarks(filteredMarks);
     } catch (error) {
       console.error("Load exam marks error:", error);
+
       toast.error(getErrorMessage(error));
+
       setExamMarks([]);
     } finally {
       setLoadingMarks(false);
@@ -266,6 +355,7 @@ export default function ManageExamMark() {
     setEditingMark("");
   };
 
+  // Update exam mark and recalculate currentMark.
   const handleUpdateMark = async (mark) => {
     if (!selectedExam) {
       toast.error("পরীক্ষা নির্বাচন করুন।");
@@ -287,12 +377,14 @@ export default function ManageExamMark() {
     setSavingEdit(true);
 
     try {
+      // Step 1: Update exam mark.
       await updateDoc(doc(db, "examMarks", mark.id), {
         obtainedMark: value,
         totalMark,
         updatedAt: serverTimestamp(),
       });
 
+      // Step 2: Update local state.
       setExamMarks((previous) =>
         previous.map((item) =>
           item.id === mark.id
@@ -305,8 +397,16 @@ export default function ManageExamMark() {
         ),
       );
 
-      toast.success("প্রাপ্ত নম্বর আপডেট হয়েছে।");
       cancelEditing();
+
+      // Step 3: Recalculate student's combined currentMark.
+      const recalculated = await recalculateStudentMark(mark);
+
+      if (recalculated) {
+        toast.success("নম্বর আপডেট হয়েছে এবং Current Mark পুনরায় হিসাব হয়েছে।");
+      } else {
+        toast.success("পরীক্ষার নম্বর আপডেট হয়েছে।");
+      }
     } catch (error) {
       console.error("Update exam mark error:", error);
       toast.error(getErrorMessage(error));
@@ -315,6 +415,7 @@ export default function ManageExamMark() {
     }
   };
 
+  // Delete exam mark and recalculate currentMark.
   const handleDeleteMark = async (mark) => {
     const result = await Swal.fire({
       title: "নম্বর মুছে ফেলবেন?",
@@ -340,8 +441,10 @@ export default function ManageExamMark() {
     setDeletingId(mark.id);
 
     try {
+      // Step 1: Delete exam mark.
       await deleteDoc(doc(db, "examMarks", mark.id));
 
+      // Step 2: Update local state.
       setExamMarks((previous) =>
         previous.filter((item) => item.id !== mark.id),
       );
@@ -350,7 +453,14 @@ export default function ManageExamMark() {
         cancelEditing();
       }
 
-      toast.success("নম্বরের রেকর্ড মুছে ফেলা হয়েছে।");
+      // Step 3: Recalculate student's combined currentMark.
+      const recalculated = await recalculateStudentMark(mark);
+
+      if (recalculated) {
+        toast.success("নম্বর মুছে ফেলা হয়েছে এবং Current Mark আপডেট হয়েছে।");
+      } else {
+        toast.success("নম্বরের রেকর্ড মুছে ফেলা হয়েছে।");
+      }
     } catch (error) {
       console.error("Delete exam mark error:", error);
       toast.error(getErrorMessage(error));
@@ -397,6 +507,7 @@ export default function ManageExamMark() {
         <section className="rounded-2xl border border-base-300 bg-base-100 p-4 shadow-sm sm:p-5">
           <div className="mb-4">
             <h2 className="font-bold">পরীক্ষা নির্বাচন</h2>
+
             <p className="mt-1 text-xs text-base-content/60">
               বিভাগ, শ্রেণি/ব্যাচ ও পরীক্ষা নির্বাচন করে নম্বর দেখুন।
             </p>
@@ -560,6 +671,7 @@ export default function ManageExamMark() {
             <div className="flex flex-col gap-3 border-b border-base-300 p-4 sm:flex-row sm:items-center sm:justify-between sm:px-5">
               <div>
                 <h2 className="font-bold">শিক্ষার্থীদের নম্বর</h2>
+
                 <p className="mt-1 text-xs text-base-content/60">
                   পূর্ণমান {totalMark}। সম্পাদনা করতে Edit বাটনে ক্লিক করুন।
                 </p>
@@ -628,6 +740,7 @@ export default function ManageExamMark() {
                   <tbody>
                     {filteredMarks.map((mark, index) => {
                       const obtainedMark = Number(mark.obtainedMark) || 0;
+
                       const percentage =
                         totalMark > 0 ? (obtainedMark / totalMark) * 100 : 0;
 

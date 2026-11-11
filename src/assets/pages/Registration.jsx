@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+
 import {
   collection,
   doc,
@@ -6,19 +7,28 @@ import {
   runTransaction,
   serverTimestamp,
 } from "firebase/firestore";
+
 import { Link, useNavigate } from "react-router";
+
 import toast from "react-hot-toast";
 
 import { db } from "../firebase/firebase.init";
+
 import { departmentList } from "../../config/departments";
 
 const initialForm = {
   name: "",
+
   phone: "",
+
   villageId: "",
+
   customVillage: "",
+
   departmentId: "",
+
   classId: "",
+
   gender: "",
 };
 
@@ -30,7 +40,9 @@ const labelClass = "mb-2 block text-sm font-semibold text-base-content";
 const SESSION_KEY = "studentSession";
 
 /* =========================================================
+
    Helpers
+
 ========================================================= */
 
 function normalizePhone(phone) {
@@ -51,6 +63,7 @@ function normalizePhone(phone) {
 
 function generatePin() {
   const values = new Uint32Array(1);
+
   crypto.getRandomValues(values);
 
   return String(values[0] % 10000).padStart(4, "0");
@@ -59,27 +72,36 @@ function generatePin() {
 async function copyToClipboard(value, label) {
   try {
     await navigator.clipboard.writeText(String(value));
+
     toast.success(`${label} কপি হয়েছে।`);
   } catch (error) {
     console.error("Clipboard error:", error);
+
     toast.error("কপি করা যায়নি। তথ্যটি নির্বাচন করে কপি করুন।");
   }
 }
 
 /* =========================================================
+
    Component
+
 ========================================================= */
 
 export default function Registration() {
   const navigate = useNavigate();
 
   const [form, setForm] = useState(initialForm);
+
   const [villages, setVillages] = useState([]);
+
   const [customVillage, setCustomVillage] = useState(false);
+
   const [loading, setLoading] = useState(true);
+
   const [submitting, setSubmitting] = useState(false);
 
   // Successful registration details shown in the modal.
+
   const [registrationSuccess, setRegistrationSuccess] = useState(null);
 
   const department = departmentList.find(
@@ -87,10 +109,13 @@ export default function Registration() {
   );
 
   const isCare = department?.type === "batch";
+
   const classes = department?.classes || [];
 
   /* =========================================================
+
      Load Villages
+
   ========================================================= */
 
   useEffect(() => {
@@ -103,14 +128,19 @@ export default function Registration() {
         if (!mounted) return;
 
         const villageList = snapshot.docs
+
           .map((item) => ({
             id: item.id,
+
             ...item.data(),
           }))
+
           .filter((item) => item.isActive !== false)
+
           .sort((a, b) =>
             String(a.name || a.villageName || "").localeCompare(
               String(b.name || b.villageName || ""),
+
               "bn",
             ),
           );
@@ -137,7 +167,9 @@ export default function Registration() {
   }, []);
 
   /* =========================================================
+
      Form Handlers
+
   ========================================================= */
 
   function handleChange(event) {
@@ -145,10 +177,13 @@ export default function Registration() {
 
     setForm((previous) => ({
       ...previous,
+
       [name]: value,
+
       ...(name === "departmentId"
         ? {
             classId: "",
+
             gender: "",
           }
         : {}),
@@ -160,13 +195,17 @@ export default function Registration() {
 
     setForm((previous) => ({
       ...previous,
+
       villageId: "",
+
       customVillage: "",
     }));
   }
 
   /* =========================================================
+
      Registration
+
   ========================================================= */
 
   async function handleSubmit(event) {
@@ -175,6 +214,7 @@ export default function Registration() {
     if (submitting || loading) return;
 
     const name = form.name.trim();
+
     const phone = normalizePhone(form.phone);
 
     const villageName = customVillage
@@ -187,31 +227,37 @@ export default function Registration() {
 
     if (!name) {
       toast.error("শিক্ষার্থীর নাম লিখুন।");
+
       return;
     }
 
     if (!/^01[3-9]\d{8}$/.test(phone)) {
       toast.error("সঠিক বাংলাদেশি মোবাইল নম্বর লিখুন।");
+
       return;
     }
 
     if (!villageName) {
       toast.error("গ্রাম বা এলাকার নাম লিখুন অথবা নির্বাচন করুন।");
+
       return;
     }
 
     if (villageName.length > 100) {
       toast.error("গ্রামের নাম ১০০ অক্ষরের মধ্যে লিখুন।");
+
       return;
     }
 
     if (!department) {
       toast.error("বিভাগ নির্বাচন করুন।");
+
       return;
     }
 
     if (!form.gender) {
       toast.error("শিক্ষার্থীর Gender নির্বাচন করুন।");
+
       return;
     }
 
@@ -221,6 +267,7 @@ export default function Registration() {
 
     if (!selectedClass) {
       toast.error(isCare ? "ব্যাচ নির্বাচন করুন।" : "শ্রেণি নির্বাচন করুন।");
+
       return;
     }
 
@@ -228,12 +275,19 @@ export default function Registration() {
 
     try {
       /*
+
        * Check for duplicate phone numbers.
+
        *
+
        * Note: This client-side scan is suitable only for a small
+
        * student collection. For a larger system, use a dedicated
+
        * phone index with a transaction or a trusted backend.
+
        */
+
       const studentsSnapshot = await getDocs(collection(db, "students"));
 
       const duplicate = studentsSnapshot.docs.some((item) => {
@@ -247,22 +301,31 @@ export default function Registration() {
 
       if (duplicate) {
         toast.error("এই মোবাইল নম্বর দিয়ে ইতিমধ্যে নিবন্ধন করা হয়েছে।");
+
         return;
       }
 
       const genderNumber = form.gender === "male" ? "1" : "2";
+
       const prefix = `${department.id}${genderNumber}`;
 
       let studentId = "";
+
       let generatedPin = "";
 
       /*
+
        * Reserve an unused student ID through a transaction.
+
        * IDs follow the existing department + gender + serial format.
+
        */
+
       for (let serial = 1; serial <= 999; serial++) {
         const candidate = `${prefix}${String(serial).padStart(3, "0")}`;
+
         const studentRef = doc(db, "students", candidate);
+
         const pin = generatePin();
 
         const created = await runTransaction(db, async (transaction) => {
@@ -274,27 +337,37 @@ export default function Registration() {
 
           transaction.set(studentRef, {
             studentId: candidate,
+
             name,
+
             phone: form.phone.trim(),
+
             phoneNormalized: phone,
+
             pin,
 
             departmentId: department.id,
+
             departmentName: department.name,
 
             villageId: customVillage ? "" : form.villageId,
+
             villageName,
 
             gender: form.gender,
 
             classId: isCare ? "" : selectedClass.id,
+
             className: isCare ? "" : selectedClass.name,
 
             batchId: isCare ? selectedClass.id : "",
+
             batchName: isCare ? selectedClass.name : "",
 
             approved: false,
+
             isCR: false,
+
             createdAt: serverTimestamp(),
           });
 
@@ -303,7 +376,9 @@ export default function Registration() {
 
         if (created) {
           studentId = candidate;
+
           generatedPin = pin;
+
           break;
         }
       }
@@ -313,31 +388,47 @@ export default function Registration() {
       }
 
       /*
+
        * Save the session for compatibility with the current portal.
+
        * The student still requires admin approval.
+
        */
+
       localStorage.setItem(
         SESSION_KEY,
+
         JSON.stringify({
           documentId: studentId,
+
           studentId,
+
           name,
+
           departmentId: department.id,
+
           departmentName: department.name,
+
           role: "student",
         }),
       );
 
       /*
+
        * Show the credentials before navigating to the portal.
+
        */
+
       setRegistrationSuccess({
         studentId,
+
         password: generatedPin,
+
         name,
       });
 
       setForm(initialForm);
+
       setCustomVillage(false);
 
       toast.success("নিবন্ধনের আবেদন সফলভাবে জমা হয়েছে!");
@@ -355,21 +446,27 @@ export default function Registration() {
   }
 
   /* =========================================================
+
      Close Success Modal
+
   ========================================================= */
 
   function goToPortal() {
     setRegistrationSuccess(null);
+
     navigate("/portal", { replace: true });
   }
 
   /* =========================================================
+
      Render
+
   ========================================================= */
 
   return (
     <main className="relative min-h-screen overflow-hidden bg-base-200 px-4 py-8 text-base-content sm:py-12">
       {/* Background decoration */}
+
       <div className="pointer-events-none absolute -left-24 top-10 h-72 w-72 rounded-full bg-primary/10 blur-3xl" />
 
       <div className="pointer-events-none absolute -right-24 bottom-0 h-80 w-80 rounded-full bg-secondary/10 blur-3xl" />
@@ -377,6 +474,7 @@ export default function Registration() {
       <div className="relative mx-auto max-w-xl">
         <div className="overflow-hidden rounded-3xl border border-base-300/70 bg-base-100 shadow-2xl shadow-base-content/5">
           {/* Header */}
+
           <header className="relative overflow-hidden bg-gradient-to-br from-primary to-secondary px-6 py-9 text-primary-content sm:px-9 sm:py-11">
             <div className="pointer-events-none absolute -right-12 -top-16 h-52 w-52 rounded-full border border-white/15" />
 
@@ -403,8 +501,10 @@ export default function Registration() {
           </header>
 
           {/* Registration Form */}
+
           <form onSubmit={handleSubmit} className="space-y-5 p-5 sm:p-9">
             {/* Name */}
+
             <label className="block">
               <span className={labelClass}>
                 শিক্ষার্থীর পূর্ণ নাম <span className="text-error">*</span>
@@ -423,6 +523,7 @@ export default function Registration() {
             </label>
 
             {/* Phone */}
+
             <label className="block">
               <span className={labelClass}>
                 মোবাইল নম্বর <span className="text-error">*</span>
@@ -447,6 +548,7 @@ export default function Registration() {
             </label>
 
             {/* Village */}
+
             <section className="rounded-2xl border border-base-300 bg-base-200/40 p-4 sm:p-5">
               <div className="mb-4">
                 <h2 className="font-bold">গ্রাম / এলাকার তথ্য</h2>
@@ -535,6 +637,7 @@ export default function Registration() {
             </section>
 
             {/* Department */}
+
             <label className="block">
               <span className={labelClass}>
                 প্রতিষ্ঠান / বিভাগ <span className="text-error">*</span>
@@ -558,6 +661,7 @@ export default function Registration() {
             </label>
 
             {/* Class or Batch */}
+
             {department && (
               <label className="block">
                 <span className={labelClass}>
@@ -586,6 +690,7 @@ export default function Registration() {
             )}
 
             {/* Gender */}
+
             <fieldset>
               <legend className={`${labelClass} mb-3`}>
                 আপনি একজন <span className="text-error">*</span>
@@ -594,6 +699,7 @@ export default function Registration() {
               <div className="grid grid-cols-2 gap-3">
                 {[
                   { value: "male", label: "ছেলে" },
+
                   { value: "female", label: "মেয়ে" },
                 ].map((item) => {
                   const selected = form.gender === item.value;
@@ -628,6 +734,7 @@ export default function Registration() {
             </fieldset>
 
             {/* Submit */}
+
             <button
               type="submit"
               disabled={submitting || loading}
@@ -666,9 +773,11 @@ export default function Registration() {
         </p>
       </div>
 
-      {/* =====================================================
+      {/* =====================================================*
+
           Registration Success Modal
-      ===================================================== */}
+
+*      ===================================================== */}
 
       {registrationSuccess && (
         <div
@@ -679,6 +788,7 @@ export default function Registration() {
         >
           <div className="modal-box max-h-[90vh] max-w-md overflow-y-auto rounded-3xl border border-base-300 bg-base-100 p-6 text-base-content shadow-2xl sm:p-8">
             {/* Success Icon */}
+
             <div className="mx-auto mb-4 flex h-16 w-16 items-center justify-center rounded-full bg-success/10 text-3xl font-bold text-success">
               ✓
             </div>
@@ -696,6 +806,7 @@ export default function Registration() {
             </p>
 
             {/* Student ID */}
+
             <div className="mt-6 rounded-2xl border border-base-300 bg-base-200/60 p-4">
               <p className="text-xs font-semibold text-base-content/60">
                 Student ID
@@ -719,6 +830,7 @@ export default function Registration() {
             </div>
 
             {/* Password / PIN */}
+
             <div className="mt-4 rounded-2xl border border-base-300 bg-base-200/60 p-4">
               <p className="text-xs font-semibold text-base-content/60">
                 Password / PIN
@@ -735,6 +847,7 @@ export default function Registration() {
                   onClick={() =>
                     copyToClipboard(
                       registrationSuccess.password,
+
                       "Password / PIN",
                     )
                   }
@@ -745,6 +858,7 @@ export default function Registration() {
             </div>
 
             {/* Warning */}
+
             <div className="alert alert-warning mt-5 items-start rounded-xl text-sm">
               <span>
                 <strong>গুরুত্বপূর্ণ:</strong> Student ID ও PIN লিখে রাখুন।
@@ -754,6 +868,7 @@ export default function Registration() {
             </div>
 
             {/* Actions */}
+
             <button
               type="button"
               className="btn btn-primary mt-6 w-full rounded-xl"
@@ -772,6 +887,7 @@ export default function Registration() {
           </div>
 
           {/* Clicking outside closes the modal without navigating */}
+
           <button
             type="button"
             className="modal-backdrop"

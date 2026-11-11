@@ -40,6 +40,12 @@ const SHEET_SECTIONS = [
         description: "Present, Past, Future",
         route: "/sheet/tense",
       },
+      {
+        id: "modifier",
+        title: "Modifer",
+        description: "Premodifer & Post Modifer",
+        route: "/sheet/modifier",
+      },
     ],
   },
   //   {

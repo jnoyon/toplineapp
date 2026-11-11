@@ -11,17 +11,27 @@ import {
 
 import { app } from "../assets/firebase/firebase.init";
 import { departmentList } from "../config/departments";
+import { calculateCurrentMark } from "../utils/calculateCurrentMark";
 
 import toast from "react-hot-toast";
 import { AnimatePresence, motion } from "framer-motion";
+import { Link } from "react-router";
 
 const db = getFirestore(app);
+
+const WRITE_BATCH_LIMIT = 400;
+const RECALCULATION_CONCURRENCY = 5;
+
+/* =========================================================
+   Helpers
+========================================================= */
 
 const normalizeId = (value) =>
   value === undefined || value === null ? "" : String(value).trim();
 
 const normalizeDepartmentId = (value) => {
   const normalized = normalizeId(value);
+
   return normalized && !Number.isNaN(Number(normalized))
     ? String(Number(normalized))
     : normalized;
@@ -33,14 +43,6 @@ const getStudentClassId = (student, isCare) => {
   }
 
   return normalizeId(student.classId || student.batchId);
-};
-
-const getStudentClassName = (student, isCare) => {
-  if (isCare) {
-    return student.batchName || student.className || "";
-  }
-
-  return student.className || student.batchName || "";
 };
 
 const getDepartment = (departmentId) =>
@@ -64,6 +66,55 @@ const formatDate = (value) => {
   }).format(date);
 };
 
+const getMarkDocumentId = (examId, studentId) => `${examId}__${studentId}`;
+
+/* =========================================================
+   Limited Concurrency
+
+   Prevents too many simultaneous Firestore reads/writes
+   during currentMark recalculation.
+========================================================= */
+
+async function runWithConcurrency(
+  items,
+  worker,
+  concurrency = RECALCULATION_CONCURRENCY,
+) {
+  const results = new Array(items.length);
+
+  let nextIndex = 0;
+
+  async function runWorker() {
+    while (true) {
+      const index = nextIndex++;
+
+      if (index >= items.length) return;
+
+      try {
+        results[index] = {
+          status: "fulfilled",
+          value: await worker(items[index]),
+        };
+      } catch (error) {
+        results[index] = {
+          status: "rejected",
+          reason: error,
+        };
+      }
+    }
+  }
+
+  const workerCount = Math.min(Math.max(1, concurrency), items.length);
+
+  await Promise.all(Array.from({ length: workerCount }, () => runWorker()));
+
+  return results;
+}
+
+/* =========================================================
+   Component
+========================================================= */
+
 export default function AddExamMark() {
   const [departmentId, setDepartmentId] = useState("");
   const [classId, setClassId] = useState("");
@@ -76,6 +127,10 @@ export default function AddExamMark() {
   const [loadingExams, setLoadingExams] = useState(false);
   const [loadingStudents, setLoadingStudents] = useState(false);
   const [saving, setSaving] = useState(false);
+
+  /* =======================================================
+     Selected Data
+  ======================================================= */
 
   const selectedDepartment = useMemo(
     () => getDepartment(departmentId),
@@ -101,11 +156,16 @@ export default function AddExamMark() {
 
   const totalMark = Number(selectedExam?.totalMark || 0);
 
-  // Load exams from AddSyllabus collection.
+  /* =======================================================
+     Load Exams
+  ======================================================= */
+
   const loadExams = useCallback(async () => {
     if (!departmentId || !classId) {
       setExams([]);
       setExamId("");
+      setStudents([]);
+      setMarks({});
       return;
     }
 
@@ -124,17 +184,14 @@ export default function AddExamMark() {
             normalizeDepartmentId(exam.departmentId) ===
             normalizeDepartmentId(departmentId);
 
-          // Match only departmentId + classId.
-          // Do not filter by classType because Care may use "classes".
+          // CARE may store batchId instead of classId.
           const examClassId = normalizeId(exam.classId || exam.batchId);
 
           return sameDepartment && examClassId === normalizeId(classId);
         })
-        .sort((a, b) => {
-          const dateA = a.examDate || "";
-          const dateB = b.examDate || "";
-          return dateB.localeCompare(dateA);
-        });
+        .sort((a, b) =>
+          String(b.examDate || "").localeCompare(String(a.examDate || "")),
+        );
 
       setExams(filteredExams);
       setExamId("");
@@ -142,8 +199,11 @@ export default function AddExamMark() {
       setMarks({});
     } catch (error) {
       console.error("Load exams error:", error);
+
       toast.error("পরীক্ষার তালিকা লোড করা যায়নি।");
+
       setExams([]);
+      setExamId("");
     } finally {
       setLoadingExams(false);
     }
@@ -153,7 +213,10 @@ export default function AddExamMark() {
     loadExams();
   }, [loadExams]);
 
-  // Load students matching the selected department and class/batch.
+  /* =======================================================
+     Load Students
+  ======================================================= */
+
   const loadStudents = useCallback(async () => {
     if (!departmentId || !classId || !examId) {
       setStudents([]);
@@ -179,7 +242,7 @@ export default function AddExamMark() {
           const sameClass =
             getStudentClassId(student, isCare) === normalizeId(classId);
 
-          // Include approved students and older records without an approval field.
+          // Preserve compatibility with older approved records.
           const isApproved = student.approved !== false;
           const isActive = student.isActive !== false;
 
@@ -194,13 +257,14 @@ export default function AddExamMark() {
         );
 
       setStudents(filteredStudents);
-
-      // Start with blank inputs. Existing marks are managed separately.
       setMarks({});
     } catch (error) {
       console.error("Load students error:", error);
+
       toast.error("শিক্ষার্থীদের তালিকা লোড করা যায়নি।");
+
       setStudents([]);
+      setMarks({});
     } finally {
       setLoadingStudents(false);
     }
@@ -210,40 +274,56 @@ export default function AddExamMark() {
     loadStudents();
   }, [loadStudents]);
 
+  /* =======================================================
+     Selection Handlers
+  ======================================================= */
+
   const handleDepartmentChange = (value) => {
+    if (saving) return;
+
     setDepartmentId(value);
     setClassId("");
     setExamId("");
+
     setExams([]);
     setStudents([]);
     setMarks({});
   };
 
   const handleClassChange = (value) => {
+    if (saving) return;
+
     setClassId(value);
     setExamId("");
+
     setStudents([]);
     setMarks({});
   };
 
   const handleExamChange = (value) => {
+    if (saving) return;
+
     setExamId(value);
     setStudents([]);
     setMarks({});
   };
 
   const handleMarkChange = (studentId, value) => {
-    // Allow empty values while typing, but validate when saving.
     setMarks((previous) => ({
       ...previous,
       [studentId]: value,
     }));
   };
 
+  /* =======================================================
+     Entered Count
+  ======================================================= */
+
   const enteredCount = useMemo(
     () =>
       students.filter((student) => {
         const studentId = String(student.studentId || student.documentId);
+
         return (
           marks[studentId] !== undefined &&
           String(marks[studentId]).trim() !== ""
@@ -252,8 +332,14 @@ export default function AddExamMark() {
     [students, marks],
   );
 
+  /* =======================================================
+     Save Exam Marks
+  ======================================================= */
+
   const handleSave = async (event) => {
     event.preventDefault();
+
+    if (saving) return;
 
     if (!selectedExam) {
       toast.error("প্রথমে একটি পরীক্ষা নির্বাচন করুন।");
@@ -264,6 +350,15 @@ export default function AddExamMark() {
       toast.error("এই শ্রেণিতে কোনো শিক্ষার্থী পাওয়া যায়নি।");
       return;
     }
+
+    if (!Number.isFinite(totalMark) || totalMark <= 0) {
+      toast.error("পরীক্ষার পূর্ণমান সঠিক নয়।");
+      return;
+    }
+
+    /* -----------------------------------------------------
+       Prepare Entries
+    ----------------------------------------------------- */
 
     const entries = students
       .map((student) => {
@@ -288,6 +383,10 @@ export default function AddExamMark() {
       return;
     }
 
+    /* -----------------------------------------------------
+       Validate Marks
+    ----------------------------------------------------- */
+
     const invalidEntry = entries.find(
       ({ obtainedMark }) =>
         !Number.isFinite(obtainedMark) ||
@@ -303,36 +402,57 @@ export default function AddExamMark() {
     setSaving(true);
 
     try {
-      // Use deterministic document IDs to prevent duplicate marks
-      // for the same exam and student.
-      // Split into batches to stay within Firestore's write limit.
-      const chunks = [];
+      /* ---------------------------------------------------
+         Firestore Batch Save
 
-      for (let index = 0; index < entries.length; index += 400) {
-        chunks.push(entries.slice(index, index + 400));
-      }
+         Deterministic document ID prevents duplicate
+         exam marks for the same student and exam.
 
-      for (const chunk of chunks) {
+         Existing createdAt is preserved because merge
+         writes do not overwrite it here.
+      --------------------------------------------------- */
+
+      for (let index = 0; index < entries.length; index += WRITE_BATCH_LIMIT) {
+        const chunk = entries.slice(index, index + WRITE_BATCH_LIMIT);
+
         const batch = writeBatch(db);
 
         chunk.forEach(({ student, studentId, obtainedMark }) => {
-          const markDocId = `${selectedExam.id}__${studentId}`;
+          const markDocId = getMarkDocumentId(selectedExam.id, studentId);
+
           const markRef = doc(db, "examMarks", markDocId);
+
+          const numericDepartmentId = Number(departmentId);
 
           batch.set(
             markRef,
             {
               examId: selectedExam.id,
+
               examType: selectedExam.examType || "",
               examDate: selectedExam.examDate || "",
               examTime: selectedExam.examTime || "",
 
-              departmentId: Number(departmentId),
+              departmentId: Number.isFinite(numericDepartmentId)
+                ? numericDepartmentId
+                : departmentId,
+
               departmentName:
                 selectedExam.departmentName || selectedDepartment?.name || "",
 
               classId,
+
               className: selectedExam.className || selectedClass?.name || "",
+
+              // Keep batch fields for CARE records.
+              ...(isCare
+                ? {
+                    batchId: classId,
+                    batchName:
+                      selectedExam.batchName || selectedClass?.name || "",
+                  }
+                : {}),
+
               classType: selectedExam.classType || "",
 
               studentId,
@@ -343,7 +463,6 @@ export default function AddExamMark() {
               obtainedMark,
 
               updatedAt: serverTimestamp(),
-              createdAt: serverTimestamp(),
             },
             { merge: true },
           );
@@ -352,22 +471,72 @@ export default function AddExamMark() {
         await batch.commit();
       }
 
+      /* ---------------------------------------------------
+         Recalculate Current Mark
+
+         currentMark =
+           attendanceMark +
+           offlineExamMark +
+           onlineExamMark
+
+         calculateCurrentMark imports db internally.
+
+         Do not update point here.
+      --------------------------------------------------- */
+
+      const recalculationResults = await runWithConcurrency(
+        entries,
+        ({ student }) =>
+          calculateCurrentMark({
+            studentDocumentId: student.documentId,
+          }),
+      );
+
+      const failedRecalculations = recalculationResults.filter(
+        (result) => result.status === "rejected",
+      );
+
+      /* ---------------------------------------------------
+         Success Messages
+      --------------------------------------------------- */
+
       toast.success(`${entries.length} জন শিক্ষার্থীর নম্বর সংরক্ষণ হয়েছে।`);
 
-      // Clear the inputs after saving.
+      if (failedRecalculations.length > 0) {
+        console.error(
+          "currentMark recalculation failures:",
+          failedRecalculations,
+        );
+
+        toast.error(
+          `${failedRecalculations.length} জন শিক্ষার্থীর currentMark আপডেট হয়নি।`,
+        );
+      } else {
+        toast.success("সব শিক্ষার্থীর currentMark সফলভাবে আপডেট হয়েছে।");
+      }
+
+      // Clear only after successful mark saving.
       setMarks({});
     } catch (error) {
       console.error("Save exam marks error:", error);
-      toast.error("নম্বর সংরক্ষণ করা যায়নি। আবার চেষ্টা করুন।");
+
+      toast.error(
+        error.message || "নম্বর সংরক্ষণ করা যায়নি। আবার চেষ্টা করুন।",
+      );
     } finally {
       setSaving(false);
     }
   };
 
+  /* =======================================================
+     UI
+  ======================================================= */
+
   return (
     <div className="min-h-screen bg-base-200/50 px-3 py-5 text-base-content sm:px-5 lg:px-8">
       <div className="mx-auto max-w-6xl space-y-5">
         {/* Header */}
+
         <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
           <div>
             <p className="text-xs font-semibold uppercase tracking-[0.2em] text-primary">
@@ -394,18 +563,26 @@ export default function AddExamMark() {
           >
             ↻ রিফ্রেশ
           </button>
+          <Link to="/manage-exam-mark" className="btn btn-error">
+            {" "}
+            মার্ক সম্পাদনা{" "}
+          </Link>
         </div>
 
         {/* Filters */}
+
         <section className="rounded-2xl border border-base-300 bg-base-100 p-4 shadow-sm sm:p-5">
           <div className="mb-4">
             <h2 className="font-bold">পরীক্ষার তথ্য</h2>
+
             <p className="mt-1 text-xs text-base-content/60">
               প্রথমে বিভাগ, এরপর শ্রেণি/ব্যাচ এবং পরীক্ষা নির্বাচন করুন।
             </p>
           </div>
 
           <div className="grid gap-4 md:grid-cols-3">
+            {/* Department */}
+
             <label className="form-control w-full">
               <span className="label-text mb-2 font-medium">বিভাগ</span>
 
@@ -413,6 +590,7 @@ export default function AddExamMark() {
                 className="select select-bordered w-full"
                 value={departmentId}
                 onChange={(event) => handleDepartmentChange(event.target.value)}
+                disabled={saving}
               >
                 <option value="">বিভাগ নির্বাচন করুন</option>
 
@@ -424,6 +602,8 @@ export default function AddExamMark() {
               </select>
             </label>
 
+            {/* Class / Batch */}
+
             <label className="form-control w-full">
               <span className="label-text mb-2 font-medium">
                 {isCare ? "ব্যাচ" : "শ্রেণি"}
@@ -433,7 +613,7 @@ export default function AddExamMark() {
                 className="select select-bordered w-full"
                 value={classId}
                 onChange={(event) => handleClassChange(event.target.value)}
-                disabled={!departmentId}
+                disabled={!departmentId || saving}
               >
                 <option value="">
                   {isCare ? "ব্যাচ নির্বাচন করুন" : "শ্রেণি নির্বাচন করুন"}
@@ -447,6 +627,8 @@ export default function AddExamMark() {
               </select>
             </label>
 
+            {/* Exam */}
+
             <label className="form-control w-full">
               <span className="label-text mb-2 font-medium">পরীক্ষা</span>
 
@@ -454,7 +636,7 @@ export default function AddExamMark() {
                 className="select select-bordered w-full"
                 value={examId}
                 onChange={(event) => handleExamChange(event.target.value)}
-                disabled={!classId || loadingExams}
+                disabled={!classId || loadingExams || saving}
               >
                 <option value="">
                   {loadingExams
@@ -482,7 +664,8 @@ export default function AddExamMark() {
           )}
         </section>
 
-        {/* Selected exam summary */}
+        {/* Selected Exam Summary */}
+
         <AnimatePresence>
           {selectedExam && (
             <motion.section
@@ -514,6 +697,7 @@ export default function AddExamMark() {
 
                 <div className="rounded-xl bg-black/10 px-5 py-3 sm:min-w-36 sm:text-center">
                   <p className="text-xs opacity-80">পূর্ণমান</p>
+
                   <p className="text-3xl font-extrabold">{totalMark}</p>
                 </div>
               </div>
@@ -521,12 +705,16 @@ export default function AddExamMark() {
           )}
         </AnimatePresence>
 
-        {/* Students and marks */}
+        {/* Students and Marks */}
+
         {selectedExam && (
           <section className="overflow-hidden rounded-2xl border border-base-300 bg-base-100 shadow-sm">
+            {/* List Header */}
+
             <div className="flex flex-col gap-3 border-b border-base-300 p-4 sm:flex-row sm:items-center sm:justify-between sm:px-5">
               <div>
                 <h2 className="font-bold">শিক্ষার্থীদের প্রাপ্ত নম্বর</h2>
+
                 <p className="mt-1 text-xs text-base-content/60">
                   নম্বর না লিখলে সেই শিক্ষার্থীর জন্য কোনো নম্বর সংরক্ষণ হবে না।
                 </p>
@@ -542,6 +730,8 @@ export default function AddExamMark() {
                 </span>
               </div>
             </div>
+
+            {/* Loading */}
 
             {loadingStudents ? (
               <div className="space-y-3 p-5">
@@ -565,13 +755,18 @@ export default function AddExamMark() {
               </div>
             ) : (
               <form onSubmit={handleSave}>
+                {/* Student Table */}
+
                 <div className="overflow-x-auto">
                   <table className="table table-sm sm:table-md">
                     <thead>
                       <tr className="bg-base-200/70 text-base-content/70">
                         <th className="w-14">ক্রম</th>
+
                         <th>শিক্ষার্থীর নাম</th>
+
                         <th>Student ID</th>
+
                         <th className="w-44">
                           প্রাপ্ত নম্বর
                           <span className="ml-1 font-normal">
@@ -658,6 +853,8 @@ export default function AddExamMark() {
                   </table>
                 </div>
 
+                {/* Save Footer */}
+
                 <div className="flex flex-col gap-3 border-t border-base-300 bg-base-200/40 p-4 sm:flex-row sm:items-center sm:justify-between sm:px-5">
                   <p className="text-xs text-base-content/60">
                     {enteredCount} জনের নম্বর দেওয়া হয়েছে। সর্বোচ্চ নম্বর{" "}
@@ -689,9 +886,12 @@ export default function AddExamMark() {
           </section>
         )}
 
+        {/* No Exam Selected */}
+
         {!selectedExam && departmentId && classId && (
           <div className="rounded-2xl border border-dashed border-base-300 bg-base-100 px-4 py-10 text-center">
             <p className="font-medium">একটি পরীক্ষা নির্বাচন করুন</p>
+
             <p className="mt-1 text-sm text-base-content/60">
               পরীক্ষার পূর্ণমান ও শিক্ষার্থীদের নম্বর এন্ট্রি ফর্ম এখানে দেখানো
               হবে।

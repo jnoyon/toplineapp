@@ -48,6 +48,8 @@ import Sheet from "./pages/Sheet";
 import Degree from "./sheet/basic-english/Degree";
 import Tense from "./sheet/basic-english/tense/Tense";
 import ExamResults from "../onlineexam/pages/ExamResults";
+import Modifier from "./sheet/english/Modifier";
+import TodaysWord from "./students/TodaysWord";
 
 const STUDENT_SESSION_KEY = "studentSession";
 
@@ -211,6 +213,7 @@ export default function Router() {
 
           <Route path="/view-syllabus" element={<ViewSyllabus />} />
           <Route path="/todays-vocabulary" element={<TodaysVocabulary />} />
+          <Route path="/todays-word" element={<TodaysWord />} />
           <Route path="/todays-verbs" element={<TodaysVerb />} />
           <Route path="/student-exam-result" element={<StudentExamResults />} />
 
@@ -221,6 +224,7 @@ export default function Router() {
           <Route path="sheet/verb-list" element={<Verbs />} />
           <Route path="sheet/degree-list" element={<Degree />} />
           <Route path="sheet/tense" element={<Tense />} />
+          <Route path="sheet/modifier" element={<Modifier />} />
         </Route>
       </Route>
     </Routes>

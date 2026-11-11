@@ -5,6 +5,7 @@ export default function TopStudents() {
     <div>
       <Leaderboard for="ব্যাচ ১" />
       <Leaderboard for="ব্যাচ ২" />
+      <Leaderboard for="আইসিটি সাপ্লিমেন্ট" />
     </div>
   );
 }

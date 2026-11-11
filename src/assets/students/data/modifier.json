@@ -1,0 +1,239 @@
+{
+  "title": "Modifier",
+  "description": "Modifier ২ প্রকার:- Pre Modifier & Post Modifier",
+  "rules": [
+    {
+      "id": "premodify-noun",
+      "title": "Premodify the Noun",
+      "description": "Noun-এর আগে উপযুক্ত শব্দ বসিয়ে Noun-কে আরও নির্দিষ্ট বা বর্ণনামূলক করতে হবে। Noun-এর আগে বিভিন্ন ধরনের শব্দ ব্যবহার করে তাকে Modify করা যায়।",
+      "formula": "Adjective + Noun",
+      "examples": [
+        {
+          "sentence": "He is a good boy.",
+          "meaning": "সে একজন ভালো ছেলে।",
+          "explanation": "'Good' একটি Adjective, যা 'boy' Noun-কে Modify করেছে।"
+        },
+        {
+          "sentence": "Arif is a regular student.",
+          "meaning": "আরিফ একজন নিয়মিত ছাত্র।",
+          "explanation": "'Regular' শব্দটি 'student' Noun-কে Modify করেছে।"
+        }
+      ]
+    },
+    {
+      "id": "use-noun-adjective",
+      "title": "Use Noun as an Adjective",
+      "description": "কোনো কোনো ক্ষেত্রে একটি Noun অন্য একটি Noun-এর আগে বসে Adjective-এর মতো কাজ করে। অর্থাৎ প্রথম Noun-টি পরবর্তী Noun সম্পর্কে অতিরিক্ত তথ্য প্রদান করে।",
+      "formula": "Noun + Noun",
+      "examples": [
+        {
+          "sentence": "He is a school teacher.",
+          "meaning": "তিনি একজন স্কুলশিক্ষক।",
+          "explanation": "'School' একটি Noun হলেও এখানে 'teacher' Noun-কে Modify করেছে।"
+        },
+        {
+          "sentence": "I bought a gold ring.",
+          "meaning": "আমি একটি সোনার আংটি কিনেছি।",
+          "explanation": "'Gold' একটি Noun, যা 'ring' Noun-এর উপাদান নির্দেশ করছে।"
+        }
+      ]
+    },
+    {
+      "id": "premodify-adjective",
+      "title": "Premodify the Adjective",
+      "description": "Adjective-এর আগে উপযুক্ত শব্দ বসিয়ে Adjective-এর মাত্রা, তীব্রতা বা অর্থকে আরও স্পষ্ট করতে হবে। সাধারণত Adverb ব্যবহার করে Adjective-কে Modify করা হয়।",
+      "formula": "Adverb + Adjective",
+      "examples": [
+        {
+          "sentence": "He is a very good boy.",
+          "meaning": "সে একজন খুব ভালো ছেলে।",
+          "explanation": "'Very' একটি Adverb, যা 'good' Adjective-এর মাত্রা বৃদ্ধি করেছে।"
+        },
+        {
+          "sentence": "She is an extremely intelligent girl.",
+          "meaning": "সে একজন অত্যন্ত মেধাবী মেয়ে।",
+          "explanation": "'Extremely' শব্দটি 'intelligent' Adjective-কে Modify করেছে।"
+        }
+      ]
+    },
+    {
+      "id": "use-demonstrative",
+      "title": "Use Demonstrative",
+      "description": "কোনো Noun-এর আগে নির্দিষ্ট ব্যক্তি, বস্তু বা বিষয়কে নির্দেশ করার জন্য Demonstrative ব্যবহার করতে হয়। কাছের ও দূরের বস্তু বোঝাতে This, That, These এবং Those ব্যবহৃত হয়।",
+      "formula": "This / That / These / Those + Noun",
+      "examples": [
+        {
+          "sentence": "This book is very interesting.",
+          "meaning": "এই বইটি খুব আকর্ষণীয়।",
+          "explanation": "'This' দ্বারা কাছের একটি বইকে নির্দেশ করা হয়েছে।"
+        },
+        {
+          "sentence": "Those students are very attentive.",
+          "meaning": "ওই শিক্ষার্থীরা খুব মনোযোগী।",
+          "explanation": "'Those' দ্বারা দূরের একাধিক শিক্ষার্থীকে নির্দেশ করা হয়েছে।"
+        }
+      ]
+    },
+    {
+      "id": "use-possessive",
+      "title": "Use Possessive",
+      "description": "কোনো ব্যক্তি বা বস্তুর মালিকানা বা অধিকার বোঝাতে Noun-এর আগে Possessive Determiner ব্যবহার করতে হয়। যেমন: My, Our, Your, His, Her, Its এবং Their।",
+      "formula": "Possessive Determiner + Noun",
+      "examples": [
+        {
+          "sentence": "My father is a teacher.",
+          "meaning": "আমার বাবা একজন শিক্ষক।",
+          "explanation": "'My' দ্বারা বাবার সঙ্গে বক্তার সম্পর্ক বা অধিকার বোঝানো হয়েছে।"
+        },
+        {
+          "sentence": "Their school is very beautiful.",
+          "meaning": "তাদের বিদ্যালয়টি খুব সুন্দর।",
+          "explanation": "'Their' দ্বারা বিদ্যালয়ের মালিকানা বা সম্পর্ক বোঝানো হয়েছে।"
+        }
+      ]
+    },
+    {
+      "id": "use-determiner",
+      "title": "Use Determiner",
+      "description": "Noun-এর আগে Article বা অন্যান্য Determiner বসিয়ে Noun-কে নির্দিষ্ট বা অনির্দিষ্টভাবে প্রকাশ করতে হয়। সাধারণত A, An এবং The ব্যবহার করা হয়।",
+      "formula": "A / An / The + Noun",
+      "examples": [
+        {
+          "sentence": "He bought a book.",
+          "meaning": "সে একটি বই কিনেছে।",
+          "explanation": "'A' দ্বারা অনির্দিষ্ট একটি বই বোঝানো হয়েছে।"
+        },
+        {
+          "sentence": "The sun rises in the east.",
+          "meaning": "সূর্য পূর্ব দিকে উদিত হয়।",
+          "explanation": "'The' দ্বারা নির্দিষ্ট ও একমাত্র সূর্যকে বোঝানো হয়েছে।"
+        }
+      ]
+    },
+    {
+      "id": "use-quantifier",
+      "title": "Use Quantifier",
+      "description": "কোনো ব্যক্তি বা বস্তুর সংখ্যা বা পরিমাণ বোঝাতে Noun-এর আগে Quantifier ব্যবহার করতে হয়। যেমন: Many, Much, Some, Any, Few, A few, Little, A little এবং Several।",
+      "formula": "Quantifier + Noun",
+      "examples": [
+        {
+          "sentence": "Many students attended the class.",
+          "meaning": "অনেক শিক্ষার্থী ক্লাসে উপস্থিত ছিল।",
+          "explanation": "'Many' দ্বারা শিক্ষার্থীর সংখ্যা বেশি বোঝানো হয়েছে।"
+        },
+        {
+          "sentence": "There is little water in the bottle.",
+          "meaning": "বোতলে অল্প পানি আছে।",
+          "explanation": "'Little' দ্বারা পানির স্বল্প পরিমাণ বোঝানো হয়েছে।"
+        }
+      ]
+    },
+    {
+      "id": "use-intensifier",
+      "title": "Use Intensifier",
+      "description": "কোনো Adjective বা Adverb-এর তীব্রতা বা মাত্রা বাড়াতে Intensifier ব্যবহার করতে হয়। যেমন: Very, Too, So, Quite, Rather, Extremely এবং Highly।",
+      "formula": "Intensifier + Adjective / Adverb",
+      "examples": [
+        {
+          "sentence": "The examination was very difficult.",
+          "meaning": "পরীক্ষাটি খুব কঠিন ছিল।",
+          "explanation": "'Very' শব্দটি 'difficult' Adjective-এর তীব্রতা বাড়িয়েছে।"
+        },
+        {
+          "sentence": "He is highly talented.",
+          "meaning": "সে অত্যন্ত প্রতিভাবান।",
+          "explanation": "'Highly' শব্দটি 'talented' Adjective-কে আরও জোরালো করেছে।"
+        }
+      ]
+    },
+    
+  {
+    "id": "use-appositive",
+    "title": "Use Appositive",
+    "description": "যখন কোনো Noun বা Noun Phrase-এর পাশে অন্য একটি Noun বা Noun Phrase বসে পূর্বের Noun সম্পর্কে অতিরিক্ত পরিচয় বা তথ্য প্রদান করে, তখন তাকে Appositive বলে।",
+    "formula": "Noun + Appositive",
+    "examples": [
+      {
+        "sentence": "Kabi Nazrul Islam, the rebel poet, wrote many poems.",
+        "meaning": "বিদ্রোহী কবি কাজী নজরুল ইসলাম অনেক কবিতা লিখেছেন।",
+        "explanation": "এখানে 'the great poet' হলো Appositive, যা 'Kazi Nazrul Islam' সম্পর্কে অতিরিক্ত পরিচয় দিয়েছে।"
+      },
+      {
+        "sentence": "My brother, a doctor, works in Dhaka.",
+        "meaning": "আমার ভাই, একজন ডাক্তার, ঢাকায় কাজ করেন।",
+        "explanation": "এখানে 'a doctor' হলো Appositive, যা 'My brother' সম্পর্কে অতিরিক্ত তথ্য দিয়েছে।"
+      }
+    ]
+  },
+ {
+  "id": "post-modify-verb",
+  "title": "Post Modify the Verb",
+  "description": "কোনো Verb-কে কখন, কোথায়, কীভাবে বা কতবার দিয়ে প্রশ্ন করলে যে Adverb বা Adverbial Phrase পাওয়া যায়, তা Verb-কে Post Modify করে।",
+  "formula": "Subject + Verb + Adverb / Adverbial Phrase",
+  "examples": [
+    {
+      "sentence": "He runs quickly.",
+      "meaning": "সে দ্রুত দৌড়ায়।",
+      "explanation": "এখানে 'quickly' শব্দটি কীভাবে দৌড়ায় প্রশ্নের উত্তর দেয় এবং 'runs' Verb-কে Modify করে।"
+    },
+    {
+      "sentence": "She goes to school every day.",
+      "meaning": "সে প্রতিদিন স্কুলে যায়।",
+      "explanation": "এখানে 'every day' শব্দগুচ্ছটি কখন স্কুলে যায় প্রশ্নের উত্তর দেয় এবং 'goes' Verb-কে Modify করে।"
+    },
+    {
+      "sentence": "The students are studying in the classroom.",
+      "meaning": "শিক্ষার্থীরা শ্রেণিকক্ষে পড়াশোনা করছে।",
+      "explanation": "এখানে 'in the classroom' শব্দগুচ্ছটি কোথায় পড়াশোনা করছে প্রশ্নের উত্তর দেয় এবং 'are studying' Verb-কে Modify করে।"
+    },
+    {
+      "sentence": "The baby slept peacefully.",
+      "meaning": "শিশুটি শান্তিতে ঘুমিয়েছিল।",
+      "explanation": "এখানে 'peacefully' শব্দটি কীভাবে ঘুমিয়েছিল প্রশ্নের উত্তর দেয় এবং 'slept' Verb-কে Modify করে।"
+    },
+    {
+      "sentence": "My father works hard.",
+      "meaning": "আমার বাবা কঠোর পরিশ্রম করেন।",
+      "explanation": "এখানে 'hard' শব্দটি কীভাবে কাজ করেন প্রশ্নের উত্তর দেয় এবং 'works' Verb-কে Modify করে।"
+    }
+  ]
+},
+  {
+    "id": "infinitive",
+    "title": "Infinitive",
+    "description": "Verb-এর Base Form-এর আগে 'to' যুক্ত হয়ে যে Non-finite Verb গঠিত হয়, তাকে Infinitive বলে। এটি বাক্যে Noun, Adjective বা Adverb হিসেবে ব্যবহৃত হতে পারে।",
+    "formula": "To + Base Form of Verb",
+    "examples": [
+      {
+        "sentence": "I want to learn English.",
+        "meaning": "আমি ইংরেজি শিখতে চাই।",
+        "explanation": "এখানে 'to learn' হলো Infinitive, যা 'want' Verb-এর Object হিসেবে ব্যবহৃত হয়েছে।"
+      },
+      {
+        "sentence": "He went to buy a book.",
+        "meaning": "সে একটি বই কিনতে গিয়েছিল।",
+        "explanation": "এখানে 'to buy' হলো Infinitive, যা যাওয়ার উদ্দেশ্য প্রকাশ করেছে।"
+      }
+    ]
+  },
+  {
+    "id": "infinitive-phrase",
+    "title": "Infinitive Phrase",
+    "description": "To + Base Form of Verb-এর সঙ্গে এর Object, Complement বা Modifier যুক্ত হয়ে যে শব্দগুচ্ছ গঠিত হয়, তাকে Infinitive Phrase বলে। এটি বাক্যে Noun, Adjective বা Adverb হিসেবে কাজ করতে পারে।",
+    "formula": "To + Base Form of Verb + Object / Complement / Modifier",
+    "examples": [
+      {
+        "sentence": "To learn English fluently is my goal.",
+        "meaning": "সাবলীলভাবে ইংরেজি শেখা আমার লক্ষ্য।",
+        "explanation": "এখানে 'To learn English fluently' একটি Infinitive Phrase, যা বাক্যের Subject হিসেবে ব্যবহৃত হয়েছে।"
+      },
+      {
+        "sentence": "She needs a pen to write a letter.",
+        "meaning": "একটি চিঠি লেখার জন্য তার একটি কলম প্রয়োজন।",
+        "explanation": "এখানে 'to write a letter' একটি Infinitive Phrase, যা 'a pen' সম্পর্কে উদ্দেশ্য প্রকাশ করেছে।"
+      }
+    ]
+  }
+
+  ]
+}

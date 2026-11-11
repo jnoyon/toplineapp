@@ -31,9 +31,11 @@ const DEFAULT_CLASS_TARGET = 20;
 const MINIMUM_CLASSES_TO_CLOSE = 2;
 const CARE_DEPARTMENT = departments.CARE;
 
+// Convert English numbers to Bangla
 const toBangla = (number) =>
   String(number).replace(/\d/g, (digit) => "০১২৩৪৫৬৭৮৯"[digit]);
 
+// Get today's date in YYYY-MM-DD format
 const todayString = () => {
   const date = new Date();
 
@@ -44,6 +46,7 @@ const todayString = () => {
   ].join("-");
 };
 
+// Add days to a date
 const addDays = (dateString, days) => {
   const date = new Date(`${dateString}T12:00:00`);
   date.setDate(date.getDate() + days);
@@ -55,33 +58,25 @@ const addDays = (dateString, days) => {
   ].join("-");
 };
 
-const getMonthEnd = (startDate) => {
-  const date = new Date(`${startDate}T12:00:00`);
-  date.setMonth(date.getMonth() + 1);
-  date.setDate(0);
-
-  return [
-    date.getFullYear(),
-    String(date.getMonth() + 1).padStart(2, "0"),
-    String(date.getDate()).padStart(2, "0"),
-  ].join("-");
-};
-
+// Normalize names
 const normalizeName = (value) =>
   String(value ?? "")
     .trim()
     .replace(/\s+/g, " ")
     .toLowerCase();
 
+// Generate month document ID
 const getMonthDocumentId = (batchId, monthNumber) =>
   `${encodeURIComponent(String(batchId).trim())}_month_${monthNumber}`;
 
+// Department helpers
 const getDepartmentId = (record) =>
   String(record?.departmentId ?? record?.departmentID ?? "");
 
 const getDepartmentName = (record) =>
   String(record?.departmentName ?? record?.department ?? "").trim();
 
+// Batch helpers
 const getBatchId = (record) =>
   String(record?.batchId || record?.classId || "").trim();
 
@@ -94,13 +89,16 @@ const getBatchName = (record) =>
       "",
   ).trim();
 
+// Attendance date
 const getSessionDate = (session) =>
   String(
     session?.date ?? session?.sessionDate ?? session?.attendanceDate ?? "",
   ).slice(0, 10);
 
+// Month name
 const getMonthName = (monthNumber) => `মাস ${toBangla(monthNumber)}`;
 
+// Student active status
 const isStudentActive = (student) => {
   const status =
     student?.isActive ?? student?.active ?? student?.enabled ?? true;
@@ -121,6 +119,7 @@ const isStudentActive = (student) => {
   return true;
 };
 
+// CARE student check
 const isCareStudent = (student) => {
   if (student?.isCare === true) return true;
 
@@ -135,6 +134,7 @@ const isCareStudent = (student) => {
   );
 };
 
+// CARE month check
 const isCareMonth = (record) => {
   const departmentId = getDepartmentId(record);
 
@@ -168,6 +168,10 @@ export default function BatchMonthlyManagement() {
   const hasAdminAccess = isAdmin(user?.email);
 
   const batches = useMemo(() => CARE_DEPARTMENT?.classes ?? [], []);
+
+  // ----------------------------------------
+  // Load Firestore data
+  // ----------------------------------------
 
   useEffect(() => {
     if (!hasAdminAccess) {
@@ -205,7 +209,9 @@ export default function BatchMonthlyManagement() {
               where("departmentName", "==", CARE_DEPARTMENT.name),
             ),
           ),
+
           getDocs(collection(db, "batchMonthStates")),
+
           getDocs(collection(db, "students")),
         ]);
 
@@ -231,11 +237,16 @@ export default function BatchMonthlyManagement() {
       );
     } catch (error) {
       console.error("Batch monthly management error:", error);
+
       toast.error("তথ্য লোড করা যায়নি। Firestore permission পরীক্ষা করুন।");
     } finally {
       setLoading(false);
     }
   }
+
+  // ----------------------------------------
+  // Selected batch
+  // ----------------------------------------
 
   const selectedBatch = useMemo(
     () =>
@@ -247,6 +258,10 @@ export default function BatchMonthlyManagement() {
   );
 
   const selectedBatchId = String(selectedBatch?.id ?? "").trim();
+
+  // ----------------------------------------
+  // Selected batch month records
+  // ----------------------------------------
 
   const selectedMonthRecords = useMemo(() => {
     if (!selectedBatch) return [];
@@ -276,6 +291,10 @@ export default function BatchMonthlyManagement() {
 
   const latestMonth = selectedMonthRecords.at(-1);
 
+  // ----------------------------------------
+  // Active student count
+  // ----------------------------------------
+
   const activeStudentCounts = useMemo(() => {
     const counts = {};
 
@@ -284,7 +303,9 @@ export default function BatchMonthlyManagement() {
     });
 
     students.forEach((student) => {
-      if (!isStudentActive(student) || !isCareStudent(student)) return;
+      if (!isStudentActive(student) || !isCareStudent(student)) {
+        return;
+      }
 
       const studentBatchName = normalizeName(getBatchName(student));
 
@@ -300,6 +321,10 @@ export default function BatchMonthlyManagement() {
     ? (activeStudentCounts[normalizeName(selectedBatch.name)] ?? 0)
     : 0;
 
+  // ----------------------------------------
+  // Target input
+  // ----------------------------------------
+
   useEffect(() => {
     const target =
       activeMonth?.plannedClasses ??
@@ -309,10 +334,21 @@ export default function BatchMonthlyManagement() {
     setTargetInput(String(target));
   }, [selectedBatchName, activeMonth?.id, latestMonth?.id]);
 
+  // ----------------------------------------
+  // Completed classes calculation
+  // ----------------------------------------
+
   const completedClasses = useMemo(() => {
     if (!activeMonth || !selectedBatch) return 0;
 
     const uniqueDates = new Set();
+
+    // Active month: count attendance up to today.
+    // Closed month: count attendance up to its saved endDate.
+    const periodEnd =
+      activeMonth.status === "active"
+        ? todayString()
+        : String(activeMonth.endDate ?? "");
 
     attendanceRecords.forEach((record) => {
       const sameBatch =
@@ -331,7 +367,7 @@ export default function BatchMonthlyManagement() {
       const insidePeriod =
         sessionDate !== "" &&
         sessionDate >= String(activeMonth.startDate ?? "") &&
-        sessionDate <= String(activeMonth.endDate ?? "");
+        sessionDate <= periodEnd;
 
       if (sameBatch && sameDepartment && insidePeriod) {
         uniqueDates.add(sessionDate);
@@ -341,9 +377,13 @@ export default function BatchMonthlyManagement() {
     return uniqueDates.size;
   }, [activeMonth, attendanceRecords, selectedBatch, selectedBatchId]);
 
+  // ----------------------------------------
+  // Validation
+  // ----------------------------------------
+
   function validateTarget() {
     if (!Number.isInteger(Number(targetInput)) || Number(targetInput) < 1) {
-      toast.error("মোট ক্লাসের সংখ্যা ১ বা তার বেশি দিন।");
+      toast.error("মোট ক্লাসের সংখ্যা ১ বা তার বেশি দিন.");
       return false;
     }
 
@@ -355,11 +395,16 @@ export default function BatchMonthlyManagement() {
       toast.error(
         "ব্যাচের সঠিক ID পাওয়া যায়নি। departments.js পরীক্ষা করুন।",
       );
+
       return false;
     }
 
     return true;
   }
+
+  // ----------------------------------------
+  // Month payload
+  // ----------------------------------------
 
   function getMonthPayload(monthNumber, startDate) {
     return {
@@ -370,16 +415,26 @@ export default function BatchMonthlyManagement() {
       batchName: selectedBatch.name,
 
       monthNumber,
+
       startDate,
-      endDate: getMonthEnd(startDate),
+
+      // IMPORTANT:
+      // No automatic end date.
+      // It will be saved only when admin closes the month.
+      endDate: null,
 
       status: "active",
+
       plannedClasses: Number(targetInput),
 
       createdAt: serverTimestamp(),
       createdBy: user?.uid ?? "",
     };
   }
+
+  // ----------------------------------------
+  // Start first month
+  // ----------------------------------------
 
   async function startFirstMonth() {
     if (!validateBatch()) return;
@@ -420,17 +475,24 @@ export default function BatchMonthlyManagement() {
       await setDoc(monthRef, getMonthPayload(1, initialStartDate));
 
       toast.success("প্রথম মাস শুরু হয়েছে।");
+
       await loadData();
     } catch (error) {
       console.error("Start first month error:", error);
+
       toast.error("মাস শুরু করা যায়নি।");
     } finally {
       setProcessing(false);
     }
   }
 
+  // ----------------------------------------
+  // Save class target
+  // ----------------------------------------
+
   async function saveClassTarget() {
     if (!activeMonth) return;
+
     if (!validateTarget()) return;
 
     const confirmed = await Swal.fire({
@@ -450,27 +512,37 @@ export default function BatchMonthlyManagement() {
     try {
       await updateDoc(doc(db, "batchMonthStates", activeMonth.id), {
         plannedClasses: Number(targetInput),
+
         updatedAt: serverTimestamp(),
         updatedBy: user?.uid ?? "",
       });
 
       toast.success("মোট ক্লাসের লক্ষ্য আপডেট হয়েছে।");
+
       await loadData();
     } catch (error) {
       console.error("Update class target error:", error);
+
       toast.error("লক্ষ্য আপডেট করা যায়নি।");
     } finally {
       setProcessing(false);
     }
   }
 
+  // ----------------------------------------
+  // Close current month manually
+  // ----------------------------------------
+
   async function closeCurrentMonth() {
     if (!activeMonth) return;
 
     if (completedClasses < MINIMUM_CLASSES_TO_CLOSE) {
       toast.error(
-        `মাস বন্ধ করতে কমপক্ষে ${toBangla(MINIMUM_CLASSES_TO_CLOSE)}টি ক্লাসের উপস্থিতি জমা দিতে হবে।`,
+        `মাস বন্ধ করতে কমপক্ষে ${toBangla(
+          MINIMUM_CLASSES_TO_CLOSE,
+        )}টি ক্লাসের উপস্থিতি জমা দিতে হবে।`,
       );
+
       return;
     }
 
@@ -478,20 +550,52 @@ export default function BatchMonthlyManagement() {
 
     const cancelledClasses = Math.max(0, target - completedClasses);
 
+    // Manual closing date
+    const closingDate = todayString();
+
     const confirmation = await Swal.fire({
       title: "মাস বন্ধ করবেন?",
+
       html: `
         <div style="text-align:left">
           <p>ব্যাচ: <strong>${selectedBatch?.name ?? ""}</strong></p>
-          <p>মাস: <strong>${getMonthName(activeMonth.monthNumber)}</strong></p>
-          <p>মোট ক্লাসের লক্ষ্য: <strong>${toBangla(target)}</strong></p>
-          <p>সম্পন্ন ক্লাস: <strong>${toBangla(completedClasses)}</strong></p>
-          <p>বাকি ক্লাস: <strong>${toBangla(cancelledClasses)}</strong></p>
+
+          <p>
+            মাস:
+            <strong>${getMonthName(activeMonth.monthNumber)}</strong>
+          </p>
+
+          <p>
+            শুরুর তারিখ:
+            <strong>${activeMonth.startDate}</strong>
+          </p>
+
+          <p>
+            শেষের তারিখ:
+            <strong>${closingDate}</strong>
+          </p>
+
+          <p>
+            মোট ক্লাসের লক্ষ্য:
+            <strong>${toBangla(target)}</strong>
+          </p>
+
+          <p>
+            সম্পন্ন ক্লাস:
+            <strong>${toBangla(completedClasses)}</strong>
+          </p>
+
+          <p>
+            বাকি ক্লাস:
+            <strong>${toBangla(cancelledClasses)}</strong>
+          </p>
+
           <p style="color:#dc2626;margin-top:12px">
             মাস বন্ধ করার পর এই মাসের হিসাব আর পরিবর্তন করা উচিত নয়।
           </p>
         </div>
       `,
+
       icon: "warning",
       showCancelButton: true,
       confirmButtonText: "হ্যাঁ, মাস বন্ধ করুন",
@@ -506,28 +610,41 @@ export default function BatchMonthlyManagement() {
     try {
       await updateDoc(doc(db, "batchMonthStates", activeMonth.id), {
         status: "closed",
-        closedDate: todayString(),
+
+        // Save endDate only when admin manually closes.
+        endDate: closingDate,
+
+        closedDate: closingDate,
+
         completedClasses,
         cancelledClasses,
+
         closedAt: serverTimestamp(),
         closedBy: user?.uid ?? "",
       });
 
       toast.success("মাস সফলভাবে বন্ধ হয়েছে।");
+
       await loadData();
     } catch (error) {
       console.error("Close month error:", error);
+
       toast.error("মাস বন্ধ করা যায়নি।");
     } finally {
       setProcessing(false);
     }
   }
 
+  // ----------------------------------------
+  // Start next month
+  // ----------------------------------------
+
   async function startNextMonth() {
     if (!validateBatch()) return;
 
     if (!latestMonth || latestMonth.status !== "closed") {
-      toast.error("আগের মাস বন্ধ করার পর নতুন মাস শুরু করুন।");
+      toast.error("আগের মাস বন্ধ করার পর নতুন মাস শুরু করুন.");
+
       return;
     }
 
@@ -535,19 +652,39 @@ export default function BatchMonthlyManagement() {
 
     const nextMonthNumber = Number(latestMonth.monthNumber) + 1;
 
-    const nextStartDate = addDays(
-      latestMonth.closedDate || latestMonth.endDate,
-      1,
-    );
+    // Next month starts one day after previous closing date.
+    const previousEndDate = latestMonth.closedDate || latestMonth.endDate;
+
+    if (!previousEndDate) {
+      toast.error("আগের মাসের শেষের তারিখ পাওয়া যায়নি।");
+
+      return;
+    }
+
+    const nextStartDate = addDays(previousEndDate, 1);
 
     const confirmation = await Swal.fire({
       title: "পরের মাস শুরু করবেন?",
+
       html: `
         <p>ব্যাচ: <strong>${selectedBatch?.name ?? ""}</strong></p>
-        <p>মাস: <strong>${getMonthName(nextMonthNumber)}</strong></p>
-        <p>মোট ক্লাস: <strong>${toBangla(targetInput)}</strong></p>
-        <p>শুরুর তারিখ: <strong>${nextStartDate}</strong></p>
+
+        <p>
+          মাস:
+          <strong>${getMonthName(nextMonthNumber)}</strong>
+        </p>
+
+        <p>
+          মোট ক্লাস:
+          <strong>${toBangla(targetInput)}</strong>
+        </p>
+
+        <p>
+          শুরুর তারিখ:
+          <strong>${nextStartDate}</strong>
+        </p>
       `,
+
       icon: "question",
       showCancelButton: true,
       confirmButtonText: "পরের মাস শুরু করুন",
@@ -569,14 +706,20 @@ export default function BatchMonthlyManagement() {
       await setDoc(monthRef, getMonthPayload(nextMonthNumber, nextStartDate));
 
       toast.success(`${getMonthName(nextMonthNumber)} শুরু হয়েছে।`);
+
       await loadData();
     } catch (error) {
       console.error("Start next month error:", error);
+
       toast.error("পরের মাস শুরু করা যায়নি।");
     } finally {
       setProcessing(false);
     }
   }
+
+  // ----------------------------------------
+  // Permission check
+  // ----------------------------------------
 
   if (!hasAdminAccess) {
     return (
@@ -588,6 +731,10 @@ export default function BatchMonthlyManagement() {
     );
   }
 
+  // ----------------------------------------
+  // Loading
+  // ----------------------------------------
+
   if (loading) {
     return (
       <div className="flex min-h-60 items-center justify-center bg-slate-50 dark:bg-slate-950">
@@ -596,9 +743,15 @@ export default function BatchMonthlyManagement() {
     );
   }
 
+  // ----------------------------------------
+  // UI
+  // ----------------------------------------
+
   return (
     <div className="min-h-screen bg-slate-50 px-3 py-5 text-slate-800 transition-colors dark:bg-slate-950 dark:text-slate-100 sm:px-5">
       <div className="mx-auto max-w-4xl space-y-4">
+        {/* Batch selection */}
+
         <section className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm dark:border-slate-800 dark:bg-slate-900">
           <div className="flex flex-wrap items-center justify-between gap-3">
             <label
@@ -634,15 +787,20 @@ export default function BatchMonthlyManagement() {
           </select>
         </section>
 
+        {/* No batch selected */}
+
         {!selectedBatch ? (
           <section className="rounded-2xl border border-slate-200 bg-white p-5 text-center text-sm text-slate-500 dark:border-slate-800 dark:bg-slate-900 dark:text-slate-400">
             departments.js-এর CARE বিভাগে ব্যাচ যোগ করুন।
           </section>
         ) : !latestMonth ? (
+          /* First month setup */
+
           <section className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm dark:border-slate-800 dark:bg-slate-900 sm:p-5">
             <div className="grid gap-3 sm:grid-cols-2">
               <label className="text-sm font-semibold">
                 <span className="mb-1.5 block">শুরুর তারিখ</span>
+
                 <input
                   type="date"
                   className="input input-bordered w-full bg-white dark:bg-slate-800"
@@ -653,6 +811,7 @@ export default function BatchMonthlyManagement() {
 
               <label className="text-sm font-semibold">
                 <span className="mb-1.5 block">মোট ক্লাসের লক্ষ্য</span>
+
                 <input
                   type="number"
                   min="1"
@@ -680,6 +839,8 @@ export default function BatchMonthlyManagement() {
           </section>
         ) : (
           <>
+            {/* Month overview */}
+
             <section className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm dark:border-slate-800 dark:bg-slate-900 sm:p-5">
               <div className="flex flex-wrap items-center justify-between gap-3">
                 <div>
@@ -703,6 +864,8 @@ export default function BatchMonthlyManagement() {
                   {activeMonth ? "চালু" : "বন্ধ"}
                 </span>
               </div>
+
+              {/* Statistics */}
 
               <div className="mt-4 grid grid-cols-2 gap-3 sm:grid-cols-3">
                 <div className="rounded-xl bg-slate-50 p-3 dark:bg-slate-800/70">
@@ -755,10 +918,13 @@ export default function BatchMonthlyManagement() {
 
                   <p className="mt-1 flex items-center gap-2 text-2xl font-black text-[#2C3E50] dark:text-white">
                     <FiUsers className="text-[#E57373]" size={20} />
+
                     {toBangla(activeStudentCount)}
                   </p>
                 </div>
               </div>
+
+              {/* Active month controls */}
 
               {activeMonth && (
                 <>
@@ -792,6 +958,8 @@ export default function BatchMonthlyManagement() {
                     </button>
                   </div>
 
+                  {/* Progress bar */}
+
                   <div className="mt-4 h-2.5 overflow-hidden rounded-full bg-slate-100 dark:bg-slate-800">
                     <div
                       className="h-full rounded-full bg-gradient-to-r from-[#E57373] to-[#E74C3C] transition-all duration-500"
@@ -807,10 +975,17 @@ export default function BatchMonthlyManagement() {
                     />
                   </div>
 
+                  {/* Date and progress information */}
+
                   <div className="mt-2 flex flex-wrap items-center justify-between gap-2 text-xs text-slate-500 dark:text-slate-400">
                     <span className="inline-flex items-center gap-1.5">
                       <FiCalendar size={13} />
-                      {activeMonth.startDate} – {activeMonth.endDate}
+
+                      {activeMonth.startDate}
+
+                      {" – "}
+
+                      {activeMonth.endDate || "চলমান"}
                     </span>
 
                     <span>
@@ -826,6 +1001,8 @@ export default function BatchMonthlyManagement() {
                     </span>
                   </div>
 
+                  {/* Close month button */}
+
                   <button
                     type="button"
                     onClick={closeCurrentMonth}
@@ -834,15 +1011,32 @@ export default function BatchMonthlyManagement() {
                     }
                     className="btn btn-error btn-sm mt-4 w-full text-white sm:w-auto"
                   >
-                    <FiCheckCircle size={15} />
+                    {processing ? (
+                      <FiRefreshCw className="animate-spin" />
+                    ) : (
+                      <FiCheckCircle size={15} />
+                    )}
                     মাস বন্ধ করুন
                   </button>
                 </>
               )}
 
+              {/* Next month controls */}
+
               {!activeMonth && (
                 <div className="mt-4">
-                  <label className="block text-xs font-semibold text-slate-600 dark:text-slate-300">
+                  <div className="rounded-xl bg-slate-50 p-3 text-xs text-slate-600 dark:bg-slate-800/70 dark:text-slate-300">
+                    <p>আগের মাস শুরু: {latestMonth.startDate}</p>
+
+                    <p className="mt-1">
+                      আগের মাস শেষ:{" "}
+                      {latestMonth.endDate ||
+                        latestMonth.closedDate ||
+                        "তারিখ পাওয়া যায়নি"}
+                    </p>
+                  </div>
+
+                  <label className="mt-3 block text-xs font-semibold text-slate-600 dark:text-slate-300">
                     পরের মাসের মোট ক্লাসের লক্ষ্য
                     <input
                       type="number"
@@ -864,12 +1058,18 @@ export default function BatchMonthlyManagement() {
                     }
                     className="btn btn-sm mt-3 w-full border-0 bg-[#2C3E50] text-white hover:bg-[#1f2d3a] sm:w-auto"
                   >
-                    <FiCalendar size={15} />
+                    {processing ? (
+                      <FiRefreshCw className="animate-spin" />
+                    ) : (
+                      <FiCalendar size={15} />
+                    )}
                     পরের মাস শুরু করুন
                   </button>
                 </div>
               )}
             </section>
+
+            {/* Month history */}
 
             <section className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm dark:border-slate-800 dark:bg-slate-900">
               <div className="border-b border-slate-100 px-4 py-3 dark:border-slate-800">
@@ -882,10 +1082,14 @@ export default function BatchMonthlyManagement() {
                 <table className="table table-sm">
                   <thead>
                     <tr className="text-xs text-slate-500 dark:text-slate-400">
-                      <th>মাস</th>
+                      <th>মাস ও তারিখ</th>
+
                       <th>মোট ক্লাস</th>
+
                       <th>সম্পন্ন</th>
+
                       <th>বাকি</th>
+
                       <th>অবস্থা</th>
                     </tr>
                   </thead>
@@ -906,8 +1110,18 @@ export default function BatchMonthlyManagement() {
 
                       return (
                         <tr key={month.id}>
-                          <td className="font-semibold">
-                            {getMonthName(month.monthNumber)}
+                          <td>
+                            <p className="font-semibold">
+                              {getMonthName(month.monthNumber)}
+                            </p>
+
+                            <p className="mt-1 text-[10px] text-slate-500 dark:text-slate-400">
+                              {month.startDate}
+
+                              {" – "}
+
+                              {month.endDate || "চলমান"}
+                            </p>
                           </td>
 
                           <td>{toBangla(target)}</td>

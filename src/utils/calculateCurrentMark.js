@@ -14,45 +14,58 @@ import { departments } from "../config/departments";
    Constants
 ========================================================= */
 
-const CARE_DEPARTMENT_ID = String(departments.CARE.id);
-const CARE_DEPARTMENT_NAME = departments.CARE.name;
+const CARE_DEPARTMENT_ID = normalizeId(departments?.CARE?.id);
+const CARE_DEPARTMENT_NAME = departments?.CARE?.name || "";
+
+const COLLECTIONS = {
+  students: "students",
+  attendance: "attendance",
+  offlineExams: "examMarks",
+  onlineExams: "examResults",
+  careMonths: "batchMonthStates",
+};
 
 /* =========================================================
-   Helpers
+   Basic Helpers
 ========================================================= */
 
-const normalize = (value) =>
-  String(value ?? "")
+function normalize(value) {
+  return String(value ?? "")
     .trim()
     .replace(/\s+/g, " ")
     .toLowerCase();
+}
 
-const normalizeId = (value) => {
+function normalizeId(value) {
   const id = String(value ?? "").trim();
 
   return /^\d+$/.test(id) ? String(Number(id)) : id;
-};
+}
 
-const getDepartmentId = (record) =>
-  normalizeId(record?.departmentId ?? record?.departmentID);
+function getDepartmentId(record) {
+  return normalizeId(record?.departmentId ?? record?.departmentID);
+}
 
-const getDepartmentName = (record) =>
-  String(record?.departmentName ?? record?.department ?? "").trim();
+function getDepartmentName(record) {
+  return String(record?.departmentName ?? record?.department ?? "").trim();
+}
 
-const getBatchId = (record) =>
-  String(record?.batchId || record?.classId || "").trim();
+function getBatchId(record) {
+  return String(record?.batchId || record?.classId || "").trim();
+}
 
-const getBatchName = (record) =>
-  String(
+function getBatchName(record) {
+  return String(
     record?.batchName ??
       record?.className ??
       record?.batch ??
       record?.class ??
       "",
   ).trim();
+}
 
-const getStudentIdentifiers = (record) =>
-  [
+function getStudentIdentifiers(record) {
+  return [
     record?.studentDocumentId,
     record?.studentDocId,
     record?.studentId,
@@ -61,21 +74,32 @@ const getStudentIdentifiers = (record) =>
   ]
     .filter((value) => value !== undefined && value !== null && value !== "")
     .map(String);
+}
 
-const isSameStudent = (record, studentDocumentId, studentId) => {
+function isSameStudent(record, studentDocumentId, studentId) {
   const identifiers = getStudentIdentifiers(record);
 
   return (
     identifiers.includes(String(studentDocumentId)) ||
     (studentId && identifiers.includes(String(studentId)))
   );
-};
+}
+
+function getNumericMark(...values) {
+  const value = values.find(
+    (item) => item !== undefined && item !== null && item !== "",
+  );
+
+  const number = Number(value);
+
+  return Number.isFinite(number) ? number : 0;
+}
 
 /* =========================================================
    Date Helpers
 ========================================================= */
 
-const toDateString = (value) => {
+function toDateString(value) {
   if (!value) return "";
 
   let date;
@@ -99,9 +123,9 @@ const toDateString = (value) => {
     String(date.getMonth() + 1).padStart(2, "0"),
     String(date.getDate()).padStart(2, "0"),
   ].join("-");
-};
+}
 
-const getRecordDate = (record, fields) => {
+function getRecordDate(record, fields) {
   for (const field of fields) {
     const date = toDateString(record?.[field]);
 
@@ -109,12 +133,13 @@ const getRecordDate = (record, fields) => {
   }
 
   return "";
-};
+}
 
-const isWithinPeriod = (date, period) =>
-  Boolean(date && date >= period.startDate && date <= period.endDate);
+function isWithinPeriod(date, period) {
+  return Boolean(date && date >= period.startDate && date <= period.endDate);
+}
 
-const getCurrentMonthPeriod = () => {
+function getCurrentMonthPeriod() {
   const now = new Date();
 
   const year = now.getFullYear();
@@ -131,37 +156,22 @@ const getCurrentMonthPeriod = () => {
     endDate,
     periodId: `${year}-${month}`,
   };
-};
-
-/* =========================================================
-   Mark Helpers
-========================================================= */
-
-const getNumericMark = (...values) => {
-  const value = values.find(
-    (item) => item !== undefined && item !== null && item !== "",
-  );
-
-  const number = Number(value);
-
-  return Number.isFinite(number) ? number : 0;
-};
+}
 
 /* =========================================================
    Department Helpers
 ========================================================= */
 
-const isCareDepartment = (student) => {
+function isCareDepartment(student) {
   const departmentId = getDepartmentId(student);
-
   const departmentName = normalize(getDepartmentName(student));
 
   return (
-    departmentId === CARE_DEPARTMENT_ID ||
+    (CARE_DEPARTMENT_ID && departmentId === CARE_DEPARTMENT_ID) ||
     departmentName === normalize(CARE_DEPARTMENT_NAME) ||
     departmentName.includes("care")
   );
-};
+}
 
 function matchesDepartment(record, student) {
   const recordDepartmentId = getDepartmentId(record);
@@ -172,84 +182,136 @@ function matchesDepartment(record, student) {
   }
 
   const recordDepartmentName = normalize(getDepartmentName(record));
-
   const studentDepartmentName = normalize(getDepartmentName(student));
 
   if (recordDepartmentName && studentDepartmentName) {
     return recordDepartmentName === studentDepartmentName;
   }
 
+  // Older records may not have department information.
   return true;
 }
 
 /* =========================================================
-   Care Batch Period
+   CARE Batch Period
+   CARE marks accumulate from the first batch month
+   to the active/latest month.
 ========================================================= */
 
-async function getCareBatchPeriod(student) {
-  const studentBatchId = getBatchId(student);
-  const studentBatchName = getBatchName(student);
+/* =========================================================
+   CARE Batch Period
+   CARE marks accumulate from the first batch month
+   to the active/latest month.
+========================================================= */
+
+async function getCareBatchPeriod(student, batchMonthSnapshot) {
+  const studentBatchId = normalizeId(getBatchId(student));
+  const studentBatchName = normalize(getBatchName(student));
 
   if (!studentBatchId && !studentBatchName) {
-    throw new Error("Care student batch information not found.");
+    throw new Error("CARE student batch information not found.");
   }
 
-  const snapshot = await getDocs(collection(db, "batchMonthStates"));
-
-  const matchingMonths = snapshot.docs
+  const matchingMonths = batchMonthSnapshot.docs
     .map((item) => ({
       id: item.id,
       ...item.data(),
     }))
     .filter((month) => {
-      const departmentId = getDepartmentId(month);
+      // Department matching
+      const monthDepartmentId = getDepartmentId(month);
+      const monthDepartmentName = normalize(getDepartmentName(month));
 
-      const departmentName = normalize(getDepartmentName(month));
-
-      const isCareMonth =
-        departmentId === CARE_DEPARTMENT_ID ||
-        departmentName === normalize(CARE_DEPARTMENT_NAME) ||
-        departmentName.includes("care");
-
-      if (!isCareMonth) return false;
-
-      const monthBatchId = getBatchId(month);
-
-      if (monthBatchId && studentBatchId) {
-        return monthBatchId === studentBatchId;
+      if (
+        monthDepartmentId &&
+        CARE_DEPARTMENT_ID &&
+        monthDepartmentId !== CARE_DEPARTMENT_ID
+      ) {
+        return false;
       }
 
-      return normalize(getBatchName(month)) === normalize(studentBatchName);
+      if (
+        monthDepartmentName &&
+        monthDepartmentName !== normalize(CARE_DEPARTMENT_NAME) &&
+        !monthDepartmentName.includes("care")
+      ) {
+        return false;
+      }
+
+      // Batch matching
+      const monthBatchId = normalizeId(getBatchId(month));
+      const monthBatchName = normalize(getBatchName(month));
+
+      const sameBatchId =
+        studentBatchId && monthBatchId && studentBatchId === monthBatchId;
+
+      const sameBatchName =
+        studentBatchName &&
+        monthBatchName &&
+        studentBatchName === monthBatchName;
+
+      // Match by ID or fallback to batch name.
+      if (sameBatchId || sameBatchName) {
+        return true;
+      }
+
+      return false;
     })
-    .filter(
-      (month) => toDateString(month.startDate) && toDateString(month.endDate),
-    )
-    .sort((a, b) => Number(a.monthNumber ?? 0) - Number(b.monthNumber ?? 0));
+    .filter((month) => {
+      const startDate = toDateString(month.startDate);
+
+      // Active month is valid even when endDate is null.
+      const isActive = month.status === "active";
+
+      const hasEndDate =
+        toDateString(month.endDate) || toDateString(month.closedDate);
+
+      return Boolean(startDate && (isActive || hasEndDate));
+    })
+    .sort((a, b) =>
+      toDateString(a.startDate).localeCompare(toDateString(b.startDate)),
+    );
 
   if (!matchingMonths.length) {
-    throw new Error(`Care batch period not found for ${studentBatchName}.`);
+    throw new Error(
+      `CARE batch period not found for ${getBatchName(student)}.`,
+    );
   }
 
+  // First month determines the cumulative starting date.
+  const firstMonth = matchingMonths[0];
+
+  // Prefer active month; otherwise use latest closed month.
   const activeMonth = matchingMonths.find((month) => month.status === "active");
 
-  const selectedMonth =
-    activeMonth || matchingMonths[matchingMonths.length - 1];
+  const latestMonth = matchingMonths[matchingMonths.length - 1];
 
-  const startDate = toDateString(selectedMonth.startDate);
+  const selectedMonth = activeMonth || latestMonth;
 
-  const endDate = toDateString(
-    selectedMonth.status === "closed"
-      ? selectedMonth.closedDate || selectedMonth.endDate
-      : selectedMonth.endDate,
-  );
+  const startDate = toDateString(firstMonth.startDate);
+
+  // Active month: calculate up to today.
+  // Closed month: calculate up to its saved closing date.
+  const endDate =
+    selectedMonth.status === "active"
+      ? toDateString(new Date())
+      : toDateString(selectedMonth.closedDate || selectedMonth.endDate);
+
+  if (!startDate || !endDate) {
+    throw new Error("Invalid CARE batch date range.");
+  }
 
   return {
     startDate,
     endDate,
-    periodId: `care:${studentBatchId || normalize(studentBatchName)}`,
-    batchId: studentBatchId,
-    batchName: studentBatchName,
+
+    periodId: `care:${studentBatchId || studentBatchName}`,
+
+    batchId: getBatchId(student),
+    batchName: getBatchName(student),
+
     monthNumber: Number(selectedMonth.monthNumber ?? 0),
+
     status: selectedMonth.status,
   };
 }
@@ -274,8 +336,23 @@ function matchesBatch(record, period, isCare) {
   );
 }
 
+function matchesExamBatch(record, period, isCare) {
+  if (!isCare) return true;
+
+  const recordBatchId = getBatchId(record);
+  const recordBatchName = getBatchName(record);
+
+  // Keep compatibility with older exam records
+  // that do not contain batch information.
+  if (!recordBatchId && !recordBatchName) {
+    return true;
+  }
+
+  return matchesBatch(record, period, true);
+}
+
 /* =========================================================
-   Attendance
+   Attendance Helpers
 ========================================================= */
 
 function isPresent(record) {
@@ -299,14 +376,15 @@ function getStudentAttendanceFromSheet(sheet, studentDocumentId, studentId) {
     return null;
   }
 
-  // New attendance sheet uses student document ID as key.
+  // Current attendance format:
+  // records[studentDocumentId] = { present, status, ... }
   const directRecord = records[String(studentDocumentId)];
 
   if (directRecord) {
     return directRecord;
   }
 
-  // Fallback if the record key differs.
+  // Compatibility with older record formats.
   return (
     Object.values(records).find(
       (item) =>
@@ -316,17 +394,16 @@ function getStudentAttendanceFromSheet(sheet, studentDocumentId, studentId) {
   );
 }
 
-async function calculateAttendanceMark(
+function calculateAttendanceMark(
+  attendanceSnapshot,
   student,
   studentDocumentId,
   period,
   isCare,
 ) {
-  const snapshot = await getDocs(collection(db, "attendance"));
-
   const presentDates = new Set();
 
-  snapshot.docs.forEach((item) => {
+  attendanceSnapshot.docs.forEach((item) => {
     const sheet = item.data();
 
     const attendanceDate = getRecordDate(sheet, [
@@ -335,17 +412,9 @@ async function calculateAttendanceMark(
       "attendanceDate",
     ]);
 
-    if (!isWithinPeriod(attendanceDate, period)) {
-      return;
-    }
-
-    if (!matchesDepartment(sheet, student)) {
-      return;
-    }
-
-    if (!matchesBatch(sheet, period, isCare)) {
-      return;
-    }
+    if (!isWithinPeriod(attendanceDate, period)) return;
+    if (!matchesDepartment(sheet, student)) return;
+    if (!matchesBatch(sheet, period, isCare)) return;
 
     const studentAttendance = getStudentAttendanceFromSheet(
       sheet,
@@ -356,6 +425,8 @@ async function calculateAttendanceMark(
     if (!studentAttendance) return;
 
     if (isPresent(studentAttendance)) {
+      // Set prevents duplicate attendance counting
+      // for the same student on the same date.
       presentDates.add(attendanceDate);
     }
   });
@@ -364,62 +435,36 @@ async function calculateAttendanceMark(
 }
 
 /* =========================================================
-   Exam Matching
+   Offline Exam Mark
 ========================================================= */
 
-function matchesExamBatch(record, period, isCare) {
-  if (!isCare) return true;
-
-  const recordBatchId = getBatchId(record);
-  const recordBatchName = getBatchName(record);
-
-  // Accept exam records without batch information.
-  if (!recordBatchId && !recordBatchName) {
-    return true;
-  }
-
-  return matchesBatch(record, period, true);
-}
-
-/* =========================================================
-   Offline Exam Marks
-========================================================= */
-
-async function calculateOfflineExamMark(
+function calculateOfflineExamMark(
+  examSnapshot,
   student,
   studentDocumentId,
   period,
   isCare,
 ) {
-  const snapshot = await getDocs(collection(db, "examMarks"));
-
   let total = 0;
 
-  snapshot.docs.forEach((item) => {
+  examSnapshot.docs.forEach((item) => {
     const record = item.data();
 
     if (!isSameStudent(record, studentDocumentId, student.studentId)) {
       return;
     }
 
-    if (!matchesDepartment(record, student)) {
-      return;
-    }
-
-    if (!matchesExamBatch(record, period, isCare)) {
-      return;
-    }
+    if (!matchesDepartment(record, student)) return;
+    if (!matchesExamBatch(record, period, isCare)) return;
 
     const examDate = getRecordDate(record, [
       "examDate",
       "date",
-      "updatedAt",
       "createdAt",
+      "updatedAt",
     ]);
 
-    if (!isWithinPeriod(examDate, period)) {
-      return;
-    }
+    if (!isWithinPeriod(examDate, period)) return;
 
     total += getNumericMark(record.obtainedMark, record.marks);
   });
@@ -428,33 +473,27 @@ async function calculateOfflineExamMark(
 }
 
 /* =========================================================
-   Online Exam Marks
+   Online Exam Mark
 ========================================================= */
 
-async function calculateOnlineExamMark(
+function calculateOnlineExamMark(
+  examSnapshot,
   student,
   studentDocumentId,
   period,
   isCare,
 ) {
-  const snapshot = await getDocs(collection(db, "examResults"));
-
   let total = 0;
 
-  snapshot.docs.forEach((item) => {
+  examSnapshot.docs.forEach((item) => {
     const record = item.data();
 
     if (!isSameStudent(record, studentDocumentId, student.studentId)) {
       return;
     }
 
-    if (!matchesDepartment(record, student)) {
-      return;
-    }
-
-    if (!matchesExamBatch(record, period, isCare)) {
-      return;
-    }
+    if (!matchesDepartment(record, student)) return;
+    if (!matchesExamBatch(record, period, isCare)) return;
 
     const examDate = getRecordDate(record, [
       "submittedAt",
@@ -463,9 +502,7 @@ async function calculateOnlineExamMark(
       "date",
     ]);
 
-    if (!isWithinPeriod(examDate, period)) {
-      return;
-    }
+    if (!isWithinPeriod(examDate, period)) return;
 
     total += getNumericMark(
       record.marks,
@@ -483,7 +520,6 @@ async function calculateOnlineExamMark(
 ========================================================= */
 
 export async function calculateCurrentMark(input) {
-  // Supports string or object argument.
   const studentDocumentId =
     typeof input === "object" && input !== null
       ? input.studentDocumentId || input.documentId || input.docId
@@ -494,7 +530,7 @@ export async function calculateCurrentMark(input) {
   }
 
   try {
-    const studentRef = doc(db, "students", String(studentDocumentId));
+    const studentRef = doc(db, COLLECTIONS.students, String(studentDocumentId));
 
     const studentSnapshot = await getDoc(studentRef);
 
@@ -509,22 +545,63 @@ export async function calculateCurrentMark(input) {
 
     const isCare = isCareDepartment(student);
 
+    /*
+     * Fetch source collections only once per calculation.
+     * These reads run in parallel to reduce waiting time.
+     */
+    const [
+      attendanceSnapshot,
+      offlineExamSnapshot,
+      onlineExamSnapshot,
+      batchMonthSnapshot,
+    ] = await Promise.all([
+      getDocs(collection(db, COLLECTIONS.attendance)),
+      getDocs(collection(db, COLLECTIONS.offlineExams)),
+      getDocs(collection(db, COLLECTIONS.onlineExams)),
+      isCare
+        ? getDocs(collection(db, COLLECTIONS.careMonths))
+        : Promise.resolve(null),
+    ]);
+
     const period = isCare
-      ? await getCareBatchPeriod(student)
+      ? await getCareBatchPeriod(student, batchMonthSnapshot)
       : getCurrentMonthPeriod();
 
-    const [attendanceMark, offlineExamMark, onlineExamMark] = await Promise.all(
-      [
-        calculateAttendanceMark(student, studentDocumentId, period, isCare),
+    /*
+     * Calculate all three mark categories.
+     * No Firestore writes happen inside these calculations.
+     */
+    const attendanceMark = calculateAttendanceMark(
+      attendanceSnapshot,
+      student,
+      studentDocumentId,
+      period,
+      isCare,
+    );
 
-        calculateOfflineExamMark(student, studentDocumentId, period, isCare),
+    const offlineExamMark = calculateOfflineExamMark(
+      offlineExamSnapshot,
+      student,
+      studentDocumentId,
+      period,
+      isCare,
+    );
 
-        calculateOnlineExamMark(student, studentDocumentId, period, isCare),
-      ],
+    const onlineExamMark = calculateOnlineExamMark(
+      onlineExamSnapshot,
+      student,
+      studentDocumentId,
+      period,
+      isCare,
     );
 
     const currentMark = attendanceMark + offlineExamMark + onlineExamMark;
 
+    /*
+     * IMPORTANT:
+     * Only currentMark-related fields are updated.
+     * The point field is never read or modified here.
+     */
     await updateDoc(studentRef, {
       currentMark,
       currentMarkPeriod: period.periodId,
@@ -532,8 +609,8 @@ export async function calculateCurrentMark(input) {
     });
 
     const result = {
-      studentDocumentId,
-      studentId: student.studentId ?? studentDocumentId,
+      studentDocumentId: String(studentDocumentId),
+      studentId: student.studentId ?? String(studentDocumentId),
       departmentId: getDepartmentId(student),
       batchId: getBatchId(student),
       batchName: getBatchName(student),

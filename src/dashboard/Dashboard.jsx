@@ -52,6 +52,15 @@ const dashboardMenus = [
     roles: ["admin", "departmenthead"],
   },
   {
+    title: "পরীক্ষার ফলাফল দিন",
+    subtitle: "মার্ক যুক্ত করুন",
+    path: "/add-exam-mark",
+    icon: MdSchool,
+    color: "text-violet-500",
+    background: "bg-violet-500/10",
+    roles: ["admin", "departmenthead"],
+  },
+  {
     title: "উপস্থিতি দিন",
     subtitle: "উপস্থিতির তথ্য পরিচালনা",
     path: "/add-attendance",

@@ -39,6 +39,7 @@ export const departments = {
     classes: [
       { id: "batch1", name: "ব্যাচ ১" },
       { id: "batch2", name: "ব্যাচ ২" },
+      { id: "batchSupplement", name: "আইসিটি সাপ্লিমেন্ট" },
     ],
   },
 };
